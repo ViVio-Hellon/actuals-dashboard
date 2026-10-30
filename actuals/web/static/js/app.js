@@ -26,10 +26,12 @@ function save(key, v) { try { localStorage.setItem(key, v); } catch { /* 保存�
 export const ctx = {
   state: null,
   nav: { y: 0, m: 0, cal: load("cal", "genba"), sel: "all", fy: 0 },
+  autoNav: true,         // 月をまだ自分で選んでいない（データが入ったら、その既定の月に合わせる）
   view: "month",
   instance: "",
   dirty: false,          // 条件表などを編集中（自動で描き直さない）
-  setNav(patch) {
+  setNav(patch, auto = false) {
+    if (!auto && (patch.y || patch.fy)) this.autoNav = false;
     Object.assign(this.nav, patch);
     if (patch.cal) save("cal", patch.cal);
     ribbon();
@@ -93,7 +95,7 @@ async function render() {
 function route() {
   const name = (location.hash || "#month").slice(1);
   ctx.view = VIEWS[name] ? name : "month";
-  if (ctx.dirty) toast("条件表の保存していない変更は破棄しました。", "warn");
+  if (ctx.dirty) toast("保存していない変更は破棄しました。", "warn");
   ctx.dirty = false;
   render();
 }
@@ -111,7 +113,11 @@ async function pollState(force = false) {
     const wasRunning = ctx.state && ctx.state.rne.running;
     const prevImport = ctx.state && ctx.state.history.last && ctx.state.history.last.id;
     ctx.state = s;
-    if (!ctx.nav.y) ctx.setNav({ y: s.default.year, m: s.default.month, fy: s.default.fy });
+    if (!ctx.nav.y || (ctx.autoNav && (ctx.nav.y !== s.default.year || ctx.nav.m !== s.default.month))) {
+      const first = !ctx.nav.y;
+      ctx.setNav({ y: s.default.year, m: s.default.month, fy: s.default.fy }, true);
+      if (!first) force = true;
+    }
     if (offline) { offline = false; $("#offline").hidden = true; }
     ribbon();
     // 新しいデータが出ていれば自動で取り込む（設定で切れる）

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlparse
 
-from .. import logsetup
+from .. import logsetup, paths_check
 from ..aggregate import ALL
 from ..service import Service, UserError
 from ..settings import APP_ID, EDITABLE, Paths, SettingsError, app_info
@@ -91,9 +91,13 @@ def _pid_alive(pid: int) -> bool:
         return code.value == 259
     try:
         os.kill(pid, 0)
-        return True
     except OSError:
         return False
+    try:   # 終わったが親が回収していない（ゾンビ）は動いていない扱い
+        with open(f"/proc/{pid}/stat", encoding="ascii") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except (OSError, IndexError):
+        return True
 
 
 class WebApp:
@@ -253,6 +257,8 @@ def make_handler(app: WebApp):
                 self._err(422, "import", str(e))
             except SettingsError as e:
                 self._err(409, "stale", str(e))
+            except paths_check.PathInputError as e:
+                self._err(422, "path", str(e))
             except Exception as e:  # noqa: BLE001
                 ref = logsetup.new_error_ref()
                 log.exception("予期しないエラー %s: %s %s", ref, self.command, self.path)
@@ -320,10 +326,14 @@ def make_handler(app: WebApp):
                 return self._json(200, svc.history_summary())
             if path == "/api/rne":
                 return self._json(200, svc.rne.status())
+            if path == "/api/fs":
+                exts = tuple(e.lower() for e in (q.get("ext") or [""])[0].split(",") if e)
+                return self._json(200, paths_check.list_dir((q.get("path") or [""])[0], exts))
             if path == "/api/settings":
                 return self._json(200, {"values": svc.settings.load(), "resolved": svc.conf(),
                                         "revision": svc.settings.revision(),
-                                        "fields": [{"key": k, "label": lb, "note": n} for k, lb, n in EDITABLE],
+                                        "fields": [{"key": k, "label": lb, "note": n, "kind": kd}
+                                                   for k, lb, n, kd in EDITABLE],
                                         "data_dir": str(app.paths.base), "log_dir": logsetup.active_dir()})
             return self._err(404, "not_found", "not found")
 
@@ -377,6 +387,10 @@ def make_handler(app: WebApp):
                                                   int(d.get("fy") or 0)))
             if path == "/api/export/open":
                 return self._json(200, svc.open_export_folder())
+            if path == "/api/paths/check":
+                return self._json(200, paths_check.check_all(d.get("values") or {}, app.paths))
+            if path == "/api/paths/open":
+                return self._json(200, {"opened": paths_check.open_path(str(d.get("path") or ""))})
             if path == "/api/settings":
                 rev, lines = svc.settings.save(d.get("values") or {}, str(d.get("revision") or ""))
                 if lines:
@@ -495,26 +509,81 @@ def serve(paths: Paths, open_browser: bool = True, port: Optional[int] = None,
     return 0
 
 
-def stop_running(paths: Paths) -> int:
-    """stop.bat から。動いている画面に終了を頼む。"""
+def _kill(pid: int) -> bool:
+    """応答しない画面のプロセスを止める（Windows は taskkill /T /F で子プロセスごと）。"""
+    try:
+        if os.name == "nt":
+            import subprocess
+            r = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
+                               creationflags=0x08000000)
+            return r.returncode == 0
+        import signal
+        os.kill(pid, signal.SIGTERM)
+        return True
+    except OSError:
+        return False
+
+
+def stop_running(paths: Paths, force_wait: float = 15.0) -> int:
+    """stop.bat から。まず画面に終了を頼み、応答しない・終わらない時は強制終了してロックを片付ける。
+
+    終了コード: 0 = 止めた（または動いていなかった）、1 = 止められなかった。
+    """
     import re
+    info_file = paths.runtime / "server.json"
+    lock_file = paths.runtime / "web.lock"
     try:
-        url = json.loads((paths.runtime / "server.json").read_text(encoding="utf-8")).get("url", "")
+        info = json.loads(info_file.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        print("起動中の画面はありません")
+        info = {}
+    url, pid = info.get("url", ""), int(info.get("pid") or 0)
+    if not pid:
+        try:
+            pid = int(json.loads(lock_file.read_text(encoding="utf-8")).get("pid") or 0)
+        except (OSError, ValueError):
+            pid = 0
+    if not pid or not _pid_alive(pid):
+        for f in (info_file, lock_file):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        print("倉入実績集計は動いていません。")
         return 0
-    if not _probe(url):
-        print("起動中の画面に接続できません（すでに終了している可能性）")
-        return 0
-    try:
-        with _LOCAL.open(url, timeout=3) as r:
-            token = re.search(r'name="app-token" content="([^"]+)"', r.read().decode("utf-8")).group(1)  # type: ignore
-        req = urllib.request.Request(url.rstrip("/") + "/api/shutdown", data=b'{"force": true}', method="POST",
-                                     headers={"Content-Type": "application/json", "X-Tool-Token": token})
-        with _LOCAL.open(req, timeout=5) as r:
-            r.read()
-        print("終了を要求しました")
-        return 0
-    except Exception as e:  # noqa: BLE001
-        print(f"終了を要求できませんでした: {e}")
+    asked = False
+    if url and _probe(url):
+        try:
+            with _LOCAL.open(url, timeout=3) as r:
+                token = re.search(r'name="app-token" content="([^"]+)"', r.read().decode("utf-8")).group(1)  # type: ignore
+            req = urllib.request.Request(url.rstrip("/") + "/api/shutdown", data=b'{"force": true}', method="POST",
+                                         headers={"Content-Type": "application/json", "X-Tool-Token": token})
+            with _LOCAL.open(req, timeout=5) as r:
+                r.read()
+            asked = True
+            print("終了を頼みました。終わるのを待っています…")
+        except Exception as e:  # noqa: BLE001
+            print(f"画面に終了を頼めませんでした（{e}）。")
+    else:
+        print("画面が応答しません。")
+    if asked:
+        t0 = time.time()
+        while time.time() - t0 < force_wait:
+            if not _pid_alive(pid):
+                print("終了しました。")
+                return 0
+            time.sleep(0.5)
+        print(f"{int(force_wait)} 秒たっても終わらないため、強制終了します（pid {pid}）。")
+    else:
+        print(f"強制終了します（pid {pid}）。")
+    _kill(pid)
+    time.sleep(1)
+    if _pid_alive(pid):
+        print("止められませんでした。タスクマネージャーで python / pythonw を終了してください。")
         return 1
+    for f in (info_file, lock_file):
+        try:
+            f.unlink()
+        except OSError:
+            pass
+    print("終了しました（強制終了）。")
+    return 0

@@ -62,20 +62,21 @@ class Paths:
         return self.base / "export"
 
 
-# 画面から変えられる項目（キー、見出し、説明）
-EDITABLE: List[Tuple[str, str, str]] = [
-    ("shared_dir", "共有フォルダ（条件表・手動訂正・蓄積した実績）",
-     "全 PC 共通の置き場所。空欄の時はこの PC の中だけに保存します（試用）。"),
-    ("source_path", "取り込み元（RNEConverter が出す倉入実績の SQLite）",
-     "RNEConverter の出力先フォルダと、RNE 一覧の出力名（既定 KURAIRE）。"),
-    ("source_table", "取り込み元の表の名前", "RNE 一覧の table_name。空欄なら自動で選びます。"),
-    ("auto_import", "新しいデータが出ていたら自動で取り込む", ""),
-    ("rneconverter_dir", "RNEConverter のフォルダ", "「データ更新」で SymNavi の抽出を頼む先（start_app.py があるフォルダ）。"),
-    ("rne_output", "RNEConverter の出力名", "rne_list.json の output。"),
-    ("python_exe", "Python（RNEConverter を動かす）", "空欄ならこのツールと同じ Python。"),
-    ("export_dir", "CSV の書き出し先", ""),
-    ("log_dir", "ログの保存先", "共有フォルダにすると全 PC の記録を 1 か所で見られます。"),
+# 画面から変えられる項目（キー、見出し、説明、種類）。種類: dir / file:<拡張子> / text / bool
+EDITABLE: List[Tuple[str, str, str, str]] = [
+    ("shared_dir", "共有フォルダ", "条件表・手動訂正・蓄積した実績を置く。全 PC で同じ場所を指定する。"
+     "空欄の時はこの PC の中だけに保存（試用）。", "dir"),
+    ("source_path", "取り込み元（倉入実績）", "RNEConverter が出す KURAIRE.sqlite3。"
+     "RNEConverter の出力先（配布先フォルダ）と同じ場所。", "file:.sqlite3"),
+    ("rneconverter_dir", "RNEConverter のフォルダ", "「データ更新」で抽出を頼む先（start_app.py があるフォルダ）。", "dir"),
+    ("python_exe", "Python", "RNEConverter を動かす python.exe。空欄ならこのツールと同じ Python。", "file:.exe"),
+    ("export_dir", "CSV の書き出し先", "月集計・明細・年集計の CSV を置くフォルダ。", "dir"),
+    ("log_dir", "ログの保存先", "共有フォルダにすると全 PC の記録を 1 か所で見られる。", "dir"),
+    ("source_table", "取り込み元の表の名前", "RNEConverter の RNE 一覧の table_name（既定 倉入実績）。空欄なら自動。", "text"),
+    ("rne_output", "RNEConverter の出力名", "RNE 一覧の output（既定 KURAIRE）。", "text"),
+    ("auto_import", "新しいデータが出ていたら自動で取り込む", "", "bool"),
 ]
+PATH_KEYS = [k for k, _, _, kind in EDITABLE if kind == "dir" or kind.startswith("file")]
 
 
 class SettingsError(ValueError):
@@ -130,7 +131,7 @@ class Settings:
     def save(self, changes: Dict[str, Any], base_rev: str) -> Tuple[str, List[str]]:
         if base_rev != self.revision():
             raise SettingsError("別のタブで設定が保存されています。読み直してから変更してください。")
-        allowed = {k for k, _, _ in EDITABLE}
+        allowed = {k for k, _, _, _ in EDITABLE}
         cur = self._user()
         defaults = self._defaults()
         log_lines = []

@@ -39,17 +39,37 @@ Python（標準ライブラリだけ）
 ## 準備
 
 1. Python 3.8 以上（追加パッケージ不要）。
-2. RNEConverter（`claude/exciting-wright-gi2v64` ブランチ以降）の RNE 一覧で `KURAIRE` を有効にし、倉入実績の RNE ファイルを置く
-   （RNEConverter の README「倉入実績集計への出力」）。
-3. `Start.vbs` で起動し、設定画面で次を指定する。
-   - 共有フォルダ: 全 PC で同じ場所（条件表・手動訂正・蓄積した実績を置く）。空欄のままだと、この PC の中だけに保存します。
-   - 取り込み元: RNEConverter の配布先の `KURAIRE.sqlite3`（既定 `\\nlmsrvngy03\Read\【New】仕掛\台帳\KURAIRE.sqlite3`）
-   - RNEConverter のフォルダ（「データ更新」ボタンを使う場合）
+2. RNEConverter（`claude/exciting-wright-gi2v64` ブランチ以降）の `rne\` に RNE ファイル `梱包実績(当月_倉入れ日付順).RNE` を置き、
+   RNE 一覧で `KURAIRE` を有効にする（RNEConverter の README「倉入実績集計への出力」）。
+3. `Start.vbs` で起動し、設定画面の「パスの設定」で次を指定する（下の節）。
 4. 旧ブックがあれば、データ画面の「旧ブックからの移行」で DATA と手動訂正を取り込む
    （`start.bat --import-workbook 旧ブック.xlsm` でも可）。
 
-起動・終了: `Start.vbs`（通常）、`start.bat`（ログをコンソールにも出す）、`stop.bat` か画面右上の「終了」。
+## パスの設定（設定画面）
+
+| 項目 | 指定するもの | 確かめること |
+|---|---|---|
+| 共有フォルダ | 条件表・手動訂正・蓄積した実績の置き場所。全 PC で同じ場所 | ある（無ければ作る）・書ける・何があるか。空欄はこの PC の中だけ（試用） |
+| 取り込み元（倉入実績） | RNEConverter が出す `KURAIRE.sqlite3`（既定 `\\nlmsrvngy03\Read\【New】仕掛\台帳\KURAIRE.sqlite3`） | ある・SQLite のファイルか・更新日時 |
+| RNEConverter のフォルダ | `start_app.py` のあるフォルダ（「データ更新」ボタンで使う） | RNE 一覧に KURAIRE があり有効か、RNE ファイルがあるか、出力先が取り込み元と同じか（違えば「取り込み元をこれにする」） |
+| Python | RNEConverter を動かす python.exe（空欄ならこのツールと同じ） | ある |
+| CSV の書き出し先・ログの保存先 | フォルダ | ある（無ければ作る）・書ける |
+
+- 「選ぶ…」でフォルダを辿って選べます（`\\サーバー\共有` を上の欄に打って「開く」でも辿れます）。「開く」はエクスプローラーで開きます。
+- 入力を変えると、保存する前に状態が出ます。`{DATA}` はデータの場所（`%USERPROFILE%\ActualsDashboard`）。
+- 既定値はツールのフォルダの `config\settings.json`。全 PC に同じ既定を配る時はここを書き換えて配ります。画面で変えた項目だけが PC ごとに残ります。
+- RNEConverter の設定（RNE 一覧・出力先）は読むだけで、書き換えません。変える時は RNEConverter の設定タブで行ってください。
+
+## 起動と終了
+
+| ファイル | 動き |
+|---|---|
+| `Start.vbs` | 通常の起動（コンソールなし）。すでに起動していれば、その画面を開く |
+| `start.bat` | 同じ画面を開き、ログをコンソールにも出す。`start.bat --import-workbook 旧ブック.xlsm` で移行 |
+| `stop.bat` | 画面に終了を頼む（画面右上の「終了」と同じ）。応答しない・15 秒たっても終わらない時は、記録してあるプロセスを強制終了（taskkill /T /F）し、残ったロックを片付ける |
+
 画面をすべて閉じると 2 分後、開いたまま問い合わせが無ければ 12 時間後に自動で終わります。
+どの .bat も `config\python_path.txt` に Python のフルパスを書くとそれを使います（pythonw.exe を書いても .bat はコンソールの出る python.exe を使う）。
 
 ## データの持ち方
 
@@ -80,7 +100,7 @@ Python（標準ライブラリだけ）
 ## 試験と照合
 
 ```
-python -m unittest discover -s tests -t .              # 56 件（正解データ照合・境界値・同時保存・画面 API・旧ブック読込）
+python -m unittest discover -s tests -t .              # 67 件（正解データ照合・境界値・同時保存・画面 API・旧ブック読込・パス設定・停止）
 python tools/compare_with_vba.py 旧ツールで集計したブック.xlsm   # 並行運用中の突き合わせ
 python tools/make_golden.py 受領ブック.xlsm tests/fixtures/golden_YYYYMM.json   # 正解データを作る
 ```

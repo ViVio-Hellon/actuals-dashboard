@@ -124,3 +124,26 @@ textarea.input { width: 100%; min-height: 120px; font-family: var(--mono); font-
   .tablewrap { max-height: none !important; overflow: visible; }
   .month-top { grid-template-columns: 0.8fr 2fr; }
 }
+
+/* パスの設定・「選ぶ…」の窓 */
+.paths th { width: 24%; }
+.paths td, .paths th { vertical-align: top; }
+.paths__input { width: 100%; min-width: 280px; font-family: var(--mono); font-size: var(--fs-sm); }
+.paths__state { width: 26%; }
+.nowrap { white-space: nowrap; }
+.picker { border: 1px solid var(--rule); border-radius: var(--radius); padding: 0; background: var(--surface);
+          color: var(--ink); width: min(720px, 94vw); box-shadow: var(--shadow-pop); }
+.picker::backdrop { background: rgb(0 0 0 / 45%); }
+.picker .askbox__body { padding: 16px 20px 6px; display: flex; flex-direction: column; gap: 8px; }
+.picker .askbox__foot { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 20px 16px; }
+.picker__bar { display: flex; gap: 6px; align-items: center; }
+.picker__path { flex: 1; font-family: var(--mono); font-size: var(--fs-sm); }
+.picker__list { list-style: none; margin: 0; padding: 4px; max-height: 50vh; overflow: auto;
+                border: 1px solid var(--rule); border-radius: var(--radius-xs); background: var(--sunken); }
+.picker__item { display: block; width: 100%; text-align: left; font: inherit; font-size: var(--fs-sm);
+                padding: 5px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); cursor: pointer; }
+.picker__item:hover, .picker__item:focus-visible { background: var(--accent-soft); }
+.picker__file { color: var(--accent); }
+.paths td:nth-child(2) { width: 40%; }
+.paths th { font-weight: 700; }
+.paths th .note, .table th .note { font-weight: 400; }
