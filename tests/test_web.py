@@ -26,7 +26,7 @@ class WebTest(unittest.TestCase):
         cls.g = g
         cls.src = write_source(cls.tmp / "KURAIRE.sqlite3", g["header"], g["rows"])
         (cls.paths.config / "settings.json").write_text(json.dumps({
-            "shared_dir": str(cls.tmp / "share"), "source_path": str(cls.src),
+            "shared_dir": str(cls.tmp / "share"), "rne_output_dir": str(cls.tmp), "rne_output": "KURAIRE",
             "export_dir": str(cls.tmp / "export")}), encoding="utf-8")
         from actuals.web import server
         cls.holder = {}
@@ -172,7 +172,14 @@ class WebTest(unittest.TestCase):
     def test_09_rne_not_configured(self):
         code, body = self.call("/api/rne/run", {})
         self.assertEqual(code, 422)
-        self.assertIn("RNEConverter", body["error"]["message"])
+        self.assertIn("RNE ファイルが見つかりません", body["error"]["message"])
+
+    def test_10_bad_output_name(self):
+        code, s = self.call("/api/settings")
+        code, body = self.call("/api/settings", {"values": {"rne_output": "A/B"}, "revision": s["revision"]})
+        self.assertEqual(code, 422)
+        code, s = self.call("/api/settings")
+        self.assertEqual(s["resolved"]["source_path"], str(self.tmp / "KURAIRE.sqlite3"))   # 置くフォルダ + 名前
 
 
 if __name__ == "__main__":

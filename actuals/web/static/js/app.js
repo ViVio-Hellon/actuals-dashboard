@@ -158,11 +158,11 @@ function initTheme() {
 async function runRne() {
   const s = ctx.state;
   if (s && !s.rne.configured) {
-    toast("RNEConverter のフォルダが未設定です。設定画面で指定してください。", "warn");
+    toast("データ更新に使う RNE ファイルか RNEConverter のフォルダが未設定です。設定画面の「パスの設定 ①」で指定してください。", "warn");
     location.hash = "#settings";
     return;
   }
-  if (!(await confirmBox(`RNEConverter で倉入実績（${s ? s.rne.output : ""}）を抽出し、終わったら取り込みます。\nSymNavi が起動します。よろしいですか？`, { ok: "データ更新" }))) return;
+  if (!(await confirmBox(`SymNavi で「${s ? s.rne.rne_name : ""}」を実行して当月の倉入実績を取り出し、\n${s ? s.rne.source : ""} を作ってから取り込みます。\nSymNavi が起動します。よろしいですか？`, { ok: "データ更新" }))) return;
   try {
     await api.post("/api/rne/run", {});
     toast("データ更新を始めました。終わったら自動で取り込みます。", "info");

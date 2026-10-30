@@ -26,7 +26,7 @@ from urllib.parse import parse_qs, urlparse
 from .. import logsetup, paths_check
 from ..aggregate import ALL
 from ..service import Service, UserError
-from ..settings import APP_ID, EDITABLE, Paths, SettingsError, app_info
+from ..settings import APP_ID, EDITABLE, GROUPS, Paths, SettingsError, SettingsInputError, app_info
 from ..sharedfile import SharedBusy, SharedUnreachable
 from ..source import SourceError
 from ..stores import Conflict, ImportError_
@@ -257,6 +257,8 @@ def make_handler(app: WebApp):
                 self._err(422, "import", str(e))
             except SettingsError as e:
                 self._err(409, "stale", str(e))
+            except SettingsInputError as e:
+                self._err(422, "rejected", str(e))
             except paths_check.PathInputError as e:
                 self._err(422, "path", str(e))
             except Exception as e:  # noqa: BLE001
@@ -332,8 +334,9 @@ def make_handler(app: WebApp):
             if path == "/api/settings":
                 return self._json(200, {"values": svc.settings.load(), "resolved": svc.conf(),
                                         "revision": svc.settings.revision(),
-                                        "fields": [{"key": k, "label": lb, "note": n, "kind": kd}
-                                                   for k, lb, n, kd in EDITABLE],
+                                        "fields": [{"key": k, "group": g, "label": lb, "note": n, "kind": kd}
+                                                   for k, g, lb, n, kd in EDITABLE],
+                                        "groups": GROUPS,
                                         "data_dir": str(app.paths.base), "log_dir": logsetup.active_dir()})
             return self._err(404, "not_found", "not found")
 

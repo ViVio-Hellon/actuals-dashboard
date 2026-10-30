@@ -147,3 +147,12 @@ textarea.input { width: 100%; min-height: 120px; font-family: var(--mono); font-
 .paths td:nth-child(2) { width: 40%; }
 .paths th { font-weight: 700; }
 .paths th .note, .table th .note { font-weight: 400; }
+.flowline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.flowline__box { display: flex; flex-direction: column; padding: 6px 12px; border-radius: var(--radius-sm);
+                 background: var(--accent-soft); border: 1px solid var(--accent-line); }
+.flowline__box b { font-size: var(--fs-sm); color: var(--accent); }
+.flowline__box small { font-size: var(--fs-xs); color: var(--muted); }
+.flowline__arrow { font-size: var(--fs-xs); color: var(--muted); text-align: center; line-height: 1.3; }
+.paths__no { display: inline-block; min-width: 2.6em; font-family: var(--mono); color: var(--accent); }
+.paths__derived th, .paths__derived td { background: var(--sunken); }
+.paths__derived td.mono { font-size: var(--fs-sm); word-break: break-all; }

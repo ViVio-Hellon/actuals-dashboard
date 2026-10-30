@@ -48,57 +48,52 @@ class PathsCheck(unittest.TestCase):
         self.assertTrue((self.tmp / "share").is_dir())
         self.assertEqual(P.check_all({"export_dir": "{DATA}/export"}, self.paths)["export_dir"]["state"], "ok")
 
-    def test_source(self):
-        src = self.tmp / "KURAIRE.sqlite3"
-        self.assertEqual(P.check_source(str(src), self.paths)["state"], "warn")         # フォルダはあるがまだ無い
-        src.write_text("not sqlite")
-        self.assertEqual(P.check_source(str(src), self.paths)["state"], "missing")
-        src.unlink()
-        sqlite3.connect(str(src)).execute("CREATE TABLE t (a)").connection.close()
-        self.assertEqual(P.check_source(str(src), self.paths)["state"], "ok")
+    def test_source_is_folder_plus_name(self):
+        res = P.check_all({"rne_output_dir": str(self.tmp), "rne_output": "KURAIRE.sqlite3"}, self.paths)
+        self.assertEqual(Path(res["source"]["path"]), self.tmp / "KURAIRE.sqlite3")      # .sqlite3 を付けても同じ
+        self.assertEqual(res["source"]["state"], "warn")                                 # まだ無い = データ更新の前
+        self.assertEqual(res["rne_output_dir"]["state"], "ok")
+        sqlite3.connect(str(self.tmp / "KURAIRE.sqlite3")).execute("CREATE TABLE t (a)").connection.close()
+        res = P.check_all({"rne_output_dir": str(self.tmp), "rne_output": "KURAIRE"}, self.paths)
+        self.assertEqual(res["source"]["state"], "ok")
+        bad = P.check_all({"rne_output_dir": str(self.tmp), "rne_output": "A:B"}, self.paths)
+        self.assertEqual(bad["rne_output"]["state"], "missing")
+        none = P.check_all({}, self.paths)
+        self.assertEqual((none["source"]["path"], none["source"]["state"]), ("", "missing"))
+        self.assertEqual(none["rne_output_dir"]["state"], "missing")
+        self.assertEqual(P.check_all({"rne_output_dir": str(self.tmp / "no")}, self.paths)["rne_output_dir"]["state"],
+                         "missing")                                                      # 置くフォルダは作らない
 
-    def _rneconverter(self, enabled=True, with_rne=True, save_dir=None):
+    def test_rne_file(self):
+        self.assertEqual(P.check_rne("", self.paths)["state"], "missing")
+        rne = self.tmp / "梱包実績(当月_倉入れ日付順).RNE"
+        self.assertEqual(P.check_rne(str(rne), self.paths)["state"], "missing")
+        rne.write_text("x", encoding="utf-8")
+        self.assertEqual(P.check_rne(str(rne), self.paths)["state"], "ok")
+
+    def _rneconverter(self, new=True, cred=True):
         root = self.tmp / "RNEConverter"
-        (root / "config").mkdir(parents=True, exist_ok=True)
-        (root / "rne").mkdir(exist_ok=True)
+        (root / "app").mkdir(parents=True, exist_ok=True)
         (root / "start_app.py").write_text("")
-        (root / "config" / "settings.json").write_text(json.dumps(
-            {"extract": {"rne_dir": "{APP_ROOT}/rne"}, "output": {"save_dir": str(save_dir or self.tmp / "out")}}),
-            encoding="utf-8")
-        (root / "config" / "rne_list.json").write_text(json.dumps(
-            [{"enabled": enabled, "rne": "梱包実績(当月_倉入れ日付順).RNE", "output": "KURAIRE"}], ensure_ascii=False),
-            encoding="utf-8")
-        if with_rne:
-            (root / "rne" / "梱包実績(当月_倉入れ日付順).RNE").write_text("x", encoding="utf-8")
+        (root / "app" / "main.py").write_text('ap.add_argument("--rne")' if new else 'ap.add_argument("--only")')
+        if cred:
+            d = self.tmp / "rnehome" / "config"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "credentials.json").write_text(json.dumps({"id": "u", "pass": "p"}))
         return root
 
     def test_rneconverter_ready(self):
-        root = self._rneconverter()
-        r = P.rneconverter_status(str(root), "KURAIRE", str(self.tmp / "out" / "KURAIRE.sqlite3"), self.paths)
-        self.assertEqual(r["state"], "ok", r)
+        self.assertEqual(P.rneconverter_status(str(self._rneconverter()), self.paths)["state"], "ok")
 
-    def test_rneconverter_problems(self):
-        root = self._rneconverter(enabled=False, with_rne=False)
-        r = P.rneconverter_status(str(root), "KURAIRE", str(self.tmp / "elsewhere.sqlite3"), self.paths)
+    def test_rneconverter_old_version_and_no_login(self):
+        r = P.rneconverter_status(str(self._rneconverter(new=False, cred=False)), self.paths)
         self.assertEqual(r["state"], "missing")
-        states = {x["label"]: x["state"] for x in r["rows"]}
-        self.assertEqual(states, {"RNE 一覧の行": "warn", "RNE ファイル": "missing", "RNEConverter の出力先": "warn"})
-        sug = [x for x in r["rows"] if x.get("suggest_source")][0]["suggest_source"]
-        self.assertEqual(Path(sug), self.tmp / "out" / "KURAIRE.sqlite3")             # 取り込み元の候補
-
-    def test_rneconverter_user_list_without_kuraire(self):
-        """RNEConverter の画面で RNE 一覧を保存済み（データの場所にある）なら、そちらを読む。"""
-        root = self._rneconverter()
-        user = self.tmp / "rnehome" / "config"
-        user.mkdir(parents=True)
-        (user / "rne_list.json").write_text(json.dumps([{"rne": "A.RNE", "output": "SIKALOT"}]), encoding="utf-8")
-        r = P.rneconverter_status(str(root), "KURAIRE", "", self.paths)
-        self.assertEqual(r["state"], "missing")
-        self.assertIn("KURAIRE がありません", r["message"])
+        self.assertEqual({x["label"]: x["state"] for x in r["rows"]},
+                         {"RNEConverter の版": "missing", "SymNavi のログイン": "missing"})
 
     def test_rneconverter_not_set(self):
-        self.assertEqual(P.rneconverter_status("", "KURAIRE", "", self.paths)["state"], "warn")
-        self.assertEqual(P.rneconverter_status(str(self.tmp), "KURAIRE", "", self.paths)["state"], "missing")
+        self.assertEqual(P.rneconverter_status("", self.paths)["state"], "missing")
+        self.assertEqual(P.rneconverter_status(str(self.tmp), self.paths)["state"], "missing")
 
 
 class Stop(unittest.TestCase):
@@ -151,3 +146,62 @@ class Stop(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DataUpdate(unittest.TestCase):
+    """「データ更新」: RNE ファイル・置くフォルダ・名前を RNEConverter に渡し、できたファイルを取り込む。"""
+
+    def test_runs_rneconverter_and_imports(self):
+        from actuals.service import Service
+        from tests.helpers import golden, write_source
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            g = golden()
+            made = write_source(tmp / "made.sqlite3", g["header"], g["rows"][:50])
+            fake = tmp / "RNEConverter"
+            fake.mkdir()
+            # 偽の RNEConverter: 受け取った引数を記録し、--save-dir に --output.sqlite3 を置く
+            (fake / "start_app.py").write_text(
+                "import json, shutil, sys\n"
+                "a = sys.argv[1:]\n"
+                "v = {a[i]: a[i + 1] for i in range(0, len(a) - 1) if a[i].startswith('--')}\n"
+                f"json.dump(a, open(r'{tmp / 'args.json'}', 'w', encoding='utf-8'), ensure_ascii=False)\n"
+                f"shutil.copyfile(r'{made}', v['--save-dir'] + '/' + v['--output'] + '.sqlite3')\n"
+                "print('ok')\n", encoding="utf-8")
+            rne = tmp / "梱包実績(当月_倉入れ日付順).RNE"
+            rne.write_text("x", encoding="utf-8")
+            out = tmp / "out"
+            out.mkdir()
+            home = tmp / "home"
+            (home / "config").mkdir(parents=True)
+            (home / "config" / "settings.json").write_text(json.dumps({
+                "shared_dir": str(tmp / "share"), "rne_path": str(rne), "rne_output_dir": str(out),
+                "rne_output": "KURAIRE", "rneconverter_dir": str(fake), "python_exe": sys.executable},
+                ensure_ascii=False), encoding="utf-8")
+            svc = Service(Paths(home))
+            svc.run_rne()
+            for _ in range(100):
+                if svc.rne.rc is not None:
+                    break
+                time.sleep(0.1)
+            self.assertEqual(svc.rne.rc, 0)
+            args = json.loads((tmp / "args.json").read_text(encoding="utf-8"))
+            self.assertEqual(args[:6], ["--rne", str(rne), "--output", "KURAIRE", "--save-dir", str(out)])
+            self.assertIn("--table", args)
+            self.assertEqual(svc.rne.after.get("rows"), 50)                    # 終わったら取り込んでいる
+            self.assertEqual(svc.history.summary()["lots"], 50)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_refuses_without_rne(self):
+        from actuals.service import Service, UserError
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            home = tmp / "home"
+            (home / "config").mkdir(parents=True)
+            (home / "config" / "settings.json").write_text(json.dumps({"shared_dir": str(tmp / "s")}), encoding="utf-8")
+            with self.assertRaises(UserError) as cm:
+                Service(Paths(home)).run_rne()
+            self.assertIn("パスの設定 ①", str(cm.exception))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)

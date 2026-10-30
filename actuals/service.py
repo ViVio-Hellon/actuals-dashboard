@@ -112,13 +112,17 @@ class Service:
     def source_status(self) -> Dict[str, Any]:
         s = self.conf()
         out: Dict[str, Any] = {"path": s["source_path"], "exists": False, "pending": False, "error": ""}
+        if not s["source_path"]:
+            out["error"] = "設定画面の「パスの設定 ①」で、作ったファイルを置くフォルダと名前を指定してください"
+            return out
         try:
             fp = S.probe(Path(s["source_path"]))
         except SharedUnreachable as e:
             out["error"] = str(e)
             return out
         if fp is None:
-            out["error"] = "まだありません（RNEConverter で KURAIRE を有効にして実行すると作られます）"
+            out["error"] = ("まだありません（「データ更新」を押すと RNEConverter が作ります）" if s["source_path"]
+                            else "設定画面の「パスの設定 ①」で、作ったファイルを置くフォルダと名前を指定してください")
             return out
         out["exists"] = True
         out["modified"] = datetime.fromtimestamp(fp[1] / 1e9).isoformat(timespec="seconds")
@@ -143,8 +147,9 @@ class Service:
                 "conditions": {"rev": cs.rev, "updated_at": cs.updated_at, "updated_by": cs.updated_by,
                                "rules": [RULE_NOT_MATERIAL[cs.rule_not_material], RULE_NOT_HIT[cs.rule_not_hit]]},
                 "overrides": len(self.master.overrides()),
-                "rne": {**self.rne.status(), "configured": bool(s.get("rneconverter_dir")),
-                        "output": s.get("rne_output")},
+                "rne": {**self.rne.status(), "configured": bool(s.get("rneconverter_dir") and s.get("rne_path")),
+                        "output": s.get("rne_output"), "rne_name": Path(s.get("rne_path") or "").name,
+                        "source": s.get("source_path")},
                 "calendars": CALENDARS}
 
     # ---------- 月の集計（旧 月集計 + ｸﾞﾗﾌ） ----------
@@ -406,9 +411,18 @@ class Service:
                 except Exception as e:  # noqa: BLE001
                     return {"error": str(e)}
             return {}
+        problems = []
+        if not s.get("rne_path") or not Path(s["rne_path"]).is_file():
+            problems.append(f"RNE ファイルが見つかりません: {s.get('rne_path') or '（未設定）'}")
+        if not s.get("rne_output_dir"):
+            problems.append("作ったファイルを置くフォルダが未設定です")
+        if not s.get("rne_output"):
+            problems.append("作るファイルの名前が未設定です")
+        if problems:
+            raise UserError("データ更新できません。設定画面の「パスの設定 ①」を確認してください: " + "／".join(problems))
         try:
-            self.rne.start(s.get("rneconverter_dir", ""), s.get("rne_output") or "KURAIRE", s.get("python_exe", ""),
-                           done)
+            self.rne.start(s.get("rneconverter_dir", ""), s["rne_path"], s["rne_output"], s["rne_output_dir"],
+                           s.get("source_table") or "", s.get("python_exe", ""), done)
         except RuntimeError as e:
             raise UserError(str(e))
         return self.rne.status()

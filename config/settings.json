@@ -1,13 +1,14 @@
 {
-  "shared_dir": "",
-  "source_path": "\\\\nlmsrvngy03\\Read\\【New】仕掛\\台帳\\KURAIRE.sqlite3",
-  "source_table": "倉入実績",
-  "auto_import": true,
-  "rneconverter_dir": "",
+  "rne_path": "",
+  "rne_output_dir": "\\\\nlmsrvngy03\\Read\\【New】仕掛\\台帳",
   "rne_output": "KURAIRE",
-  "python_exe": "",
+  "rneconverter_dir": "",
+  "shared_dir": "",
   "export_dir": "{DATA}/export",
   "log_dir": "{DATA}/logs",
+  "python_exe": "",
+  "source_table": "倉入実績",
+  "auto_import": true,
   "lock_wait_sec": 10,
   "log_keep_days": 90
 }

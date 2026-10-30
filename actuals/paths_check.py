@@ -143,26 +143,37 @@ def check_shared(value: str, paths: Paths) -> Dict[str, Any]:
     return r
 
 
-def check_source(value: str, paths: Paths, table: str = "") -> Dict[str, Any]:
+def check_rne(value: str, paths: Paths) -> Dict[str, Any]:
     if not value.strip():
-        return _item("missing", "取り込み元が未設定です。")
+        return _item("missing", "未設定です。「選ぶ…」で 梱包実績(当月_倉入れ日付順).RNE を選んでください。")
     p = Path(expand(value, paths))
     ex = _try(lambda: p.is_file(), False)
     if ex == "timeout":
         return _item("timeout", f"応答がありません（{NET_TIMEOUT:.0f} 秒）。")
     if not ex:
-        parent = _try(lambda: p.parent.is_dir(), False)
-        if parent is True:
-            return _item("warn", "フォルダはありますが、ファイルはまだありません。RNEConverter で KURAIRE を実行すると作られます。")
-        return _item("missing", "ファイルも、置くフォルダもありません。")
+        return _item("missing", "ファイルがありません。")
+    if p.suffix.lower() != ".rne":
+        return _item("warn", "拡張子が .RNE ではありません。SymNavi の問い合わせファイルか確認してください。")
+    return _item("ok", f"あります（{_mtime(p)} 更新）。")
+
+
+def check_source(path_text: str) -> Dict[str, Any]:
+    """取り込むファイル（置くフォルダ + 名前 から決まる）。まだ無いのは、データ更新の前なら普通。"""
+    if not path_text:
+        return _item("missing", "「作ったファイルを置くフォルダ」と「作るファイルの名前」を入れると決まります。")
+    p = Path(path_text)
+    ex = _try(lambda: p.is_file(), False)
+    if ex == "timeout":
+        return _item("timeout", f"応答がありません（{NET_TIMEOUT:.0f} 秒）。")
+    if not ex:
+        return _item("warn", "まだありません。「データ更新」を押すと RNEConverter が作ります。")
 
     def head():
         with open(p, "rb") as f:
             return f.read(16)
-    h = _try(head, b"")
-    if h != b"SQLite format 3\x00":
-        return _item("missing", "SQLite のファイルではありません（RNEConverter の出力 .sqlite3 を指定してください）。")
-    return _item("ok", f"あります（{_mtime(p)} 更新）。")
+    if _try(head, b"") != b"SQLite format 3\x00":
+        return _item("missing", "同じ名前のファイルがありますが、SQLite ではありません。名前を変えてください。")
+    return _item("ok", f"あります（{_mtime(p)} 更新）。このファイルから取り込みます。")
 
 
 def check_python(value: str) -> Dict[str, Any]:
@@ -179,66 +190,55 @@ def _read_json(p: Path) -> Any:
         return None
 
 
-def _deep(base: Dict[str, Any], upd: Dict[str, Any]) -> Dict[str, Any]:
-    out = dict(base)
-    for k, v in (upd or {}).items():
-        out[k] = _deep(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
-    return out
-
-
-def rneconverter_status(rne_dir_text: str, output: str, source_value: str, paths: Paths) -> Dict[str, Any]:
-    """RNEConverter の設定を読んで、KURAIRE が動ける状態かを見る（RNEConverter の設定は書き換えない）。"""
+def rneconverter_status(rne_dir_text: str, paths: Paths) -> Dict[str, Any]:
+    """RNEConverter が「データ更新」に使えるか（RNEConverter の設定は読むだけで書き換えない）。"""
     if not rne_dir_text.strip():
-        return _item("warn", "RNEConverter のフォルダが未設定です。「データ更新」ボタンは使えません"
-                             "（RNEConverter を別に実行し、出力を取り込むことはできます）。", rows=[])
+        return _item("missing", "未設定です。RNEConverter のフォルダ（start_app.py があるフォルダ）を選んでください。"
+                                "未設定でも、ほかの PC が作ったファイルの取り込みはできます。", rows=[])
     root = Path(expand(rne_dir_text, paths))
     if _try(lambda: (root / "start_app.py").is_file(), False) is not True:
-        return _item("missing", "このフォルダに start_app.py がありません（RNEConverter のフォルダを指定してください）。", rows=[])
+        return _item("missing", "このフォルダに start_app.py がありません（RNEConverter のフォルダを選んでください）。",
+                     rows=[])
+    rows: List[Dict[str, Any]] = []
+    main_py = _try(lambda: (root / "app" / "main.py").read_text(encoding="utf-8"), "") or ""
+    new_enough = '"--rne"' in main_py
+    rows.append({"label": "RNEConverter の版", "state": "ok" if new_enough else "missing",
+                 "value": "RNE ファイルと置き場所を指定して実行できる版" if new_enough
+                 else "古い版です（RNE ファイルと置き場所を渡せません）",
+                 "note": "" if new_enough else "RNEConverter を新しい版（claude/exciting-wright-gi2v64 以降）に入れ替えてください。"})
     env = os.environ.get("RNE_CONVERTER_HOME")
     data = Path(env) if env else Path(os.environ.get("USERPROFILE") or Path.home()) / "RNEConverter"
-    settings = _deep(_read_json(root / "config" / "settings.json") or {},
-                     _read_json(data / "config" / "settings.json") or {})
-    user_list = data / "config" / "rne_list.json"
-    rne_list = _read_json(user_list) if user_list.exists() else _read_json(root / "config" / "rne_list.json")
-    list_from = str(user_list if user_list.exists() else root / "config" / "rne_list.json")
-
-    def ex(s: str) -> str:
-        return str(s or "").replace("{APP_ROOT}", str(root)).replace("{DATA}", str(data))
-    rows: List[Dict[str, Any]] = []
-    entry = next((e for e in (rne_list or []) if e.get("output") == output), None)
-    if entry is None:
-        return _item("missing", f"RNEConverter の RNE 一覧（{list_from}）に {output} がありません。"
-                                f"RNEConverter の設定タブ → RNE 一覧で、出力名 {output} の行を追加してください。", rows=rows)
-    rows.append({"label": "RNE 一覧の行", "value": f"{output}（{'有効' if entry.get('enabled', True) else '無効'}）",
-                 "state": "ok" if entry.get("enabled", True) else "warn",
-                 "note": "" if entry.get("enabled", True) else "RNEConverter の設定タブ → RNE 一覧で有効にしてください。"})
-    rne = str(entry.get("rne") or "")
-    rne_dir = Path(ex((settings.get("extract") or {}).get("rne_dir", "{APP_ROOT}/rne")))
-    rp = Path(rne) if (Path(rne).is_absolute() or rne.startswith("\\\\") or (len(rne) > 1 and rne[1] == ":")) else rne_dir / rne
-    hit = _try(lambda: rp.is_file(), False)
-    rows.append({"label": "RNE ファイル", "value": str(rp), "state": "ok" if hit is True else "missing",
-                 "note": "" if hit is True else "ありません。旧ブックと同じフォルダにあった RNE をここに置いてください。"})
-    save_dir = ex((settings.get("output") or {}).get("save_dir", ""))
-    expected = str(Path(save_dir) / f"{output}.sqlite3") if save_dir else ""
-    same = bool(expected) and os.path.normcase(os.path.normpath(expected)) == \
-        os.path.normcase(os.path.normpath(expand(source_value, paths)))
-    rows.append({"label": "RNEConverter の出力先", "value": expected or "（未設定）", "state": "ok" if same else "warn",
-                 "note": "" if same else "取り込み元と違います。「取り込み元をこれにする」で合わせられます。",
-                 "suggest_source": "" if same else expected})
+    cred = _read_json(data / "config" / "credentials.json") or {}
+    has_cred = bool(cred.get("id") and cred.get("pass")) or bool(os.environ.get("RNE_SYMNAVI_ID"))
+    rows.append({"label": "SymNavi のログイン", "state": "ok" if has_cred else "missing",
+                 "value": "この PC の RNEConverter に登録済み" if has_cred else "この PC の RNEConverter に未登録",
+                 "note": "" if has_cred else "RNEConverter を起動し、設定タブ →「認証」で ID とパスワードを登録してください。"})
     bad = [r for r in rows if r["state"] != "ok"]
-    state = "ok" if not bad else ("missing" if any(r["state"] == "missing" for r in bad) else "warn")
-    msg = "「データ更新」で使えます。" if state == "ok" else "下の項目を確認してください。"
-    return _item(state, msg, rows=rows, list_from=list_from)
+    return _item("ok" if not bad else "missing", "使えます。" if not bad else "下の項目を確認してください。", rows=rows)
 
 
 def check_all(values: Dict[str, Any], paths: Paths) -> Dict[str, Any]:
-    v = {k: str(values.get(k) or "") for k in ("shared_dir", "source_path", "source_table", "rneconverter_dir",
-                                               "rne_output", "python_exe", "export_dir", "log_dir")}
+    from .settings import source_file
+    v = {k: str(values.get(k) or "") for k in ("shared_dir", "rne_path", "rne_output_dir", "rne_output",
+                                               "rneconverter_dir", "python_exe", "export_dir", "log_dir")}
+    name = v["rne_output"].strip()
+    if name.lower().endswith(".sqlite3"):
+        name = name[:-8]
+    out_dir = expand(v["rne_output_dir"], paths) if v["rne_output_dir"].strip() else ""
+    src = source_file(out_dir, name)
+    if not name:
+        name_state = _item("missing", "未設定です。")
+    elif any(ch in name for ch in '\\/:*?"<>|'):
+        name_state = _item("missing", "使えない文字があります（\\ / : * ? \" < > |）。")
+    else:
+        name_state = _item("ok", f"「{name}.sqlite3」を作ります。")
     return {
+        "rne_path": check_rne(v["rne_path"], paths),
+        "rne_output_dir": _writable(Path(out_dir), create=False) if out_dir else _item("missing", "未設定です。"),
+        "rne_output": name_state,
+        "rneconverter_dir": rneconverter_status(v["rneconverter_dir"], paths),
+        "source": {**check_source(src), "path": src},
         "shared_dir": check_shared(v["shared_dir"], paths),
-        "source_path": check_source(v["source_path"], paths, v["source_table"]),
-        "rneconverter_dir": rneconverter_status(v["rneconverter_dir"], v["rne_output"] or "KURAIRE",
-                                                v["source_path"], paths),
         "python_exe": check_python(v["python_exe"]),
         "export_dir": _writable(Path(expand(v["export_dir"], paths)), create=True) if v["export_dir"]
         else _item("missing", "未設定です。"),

@@ -62,25 +62,55 @@ class Paths:
         return self.base / "export"
 
 
-# 画面から変えられる項目（キー、見出し、説明、種類）。種類: dir / file:<拡張子> / text / bool
-EDITABLE: List[Tuple[str, str, str, str]] = [
-    ("shared_dir", "共有フォルダ", "条件表・手動訂正・蓄積した実績を置く。全 PC で同じ場所を指定する。"
-     "空欄の時はこの PC の中だけに保存（試用）。", "dir"),
-    ("source_path", "取り込み元（倉入実績）", "RNEConverter が出す KURAIRE.sqlite3。"
-     "RNEConverter の出力先（配布先フォルダ）と同じ場所。", "file:.sqlite3"),
-    ("rneconverter_dir", "RNEConverter のフォルダ", "「データ更新」で抽出を頼む先（start_app.py があるフォルダ）。", "dir"),
-    ("python_exe", "Python", "RNEConverter を動かす python.exe。空欄ならこのツールと同じ Python。", "file:.exe"),
-    ("export_dir", "CSV の書き出し先", "月集計・明細・年集計の CSV を置くフォルダ。", "dir"),
-    ("log_dir", "ログの保存先", "共有フォルダにすると全 PC の記録を 1 か所で見られる。", "dir"),
-    ("source_table", "取り込み元の表の名前", "RNEConverter の RNE 一覧の table_name（既定 倉入実績）。空欄なら自動。", "text"),
-    ("rne_output", "RNEConverter の出力名", "RNE 一覧の output（既定 KURAIRE）。", "text"),
-    ("auto_import", "新しいデータが出ていたら自動で取り込む", "", "bool"),
+# 画面から変えられる項目（キー、段、見出し、何に使うか、種類）。種類: dir / file:<拡張子> / text / bool
+# 段は、データの流れの順: ① SymNavi から取り出す → ② 取り込んで集計する → ③ 書き出す・記録する
+GROUPS: Dict[str, str] = {
+    "extract": "① データ更新（SymNavi から当月の倉入実績を取り出す）",
+    "store": "② 集計データの置き場所",
+    "output": "③ 書き出しと記録",
+    "advanced": "詳しい設定（ふつうは変えない）",
+}
+EDITABLE: List[Tuple[str, str, str, str, str]] = [
+    ("rne_path", "extract", "RNE ファイル",
+     "SymNavi に渡す問い合わせのファイル。旧ブックと同じフォルダにあった「梱包実績(当月_倉入れ日付順).RNE」を選ぶ。"
+     "「データ更新」を押すと、この RNE で当月の倉入実績を取り出す。", "file:.rne"),
+    ("rne_output_dir", "extract", "作ったファイルを置くフォルダ",
+     "RNEConverter が取り出した倉入実績を SQLite のファイルにして置く場所。このツールはここから取り込む。"
+     "共有フォルダにすると、どの PC で「データ更新」しても全員が取り込める。", "dir"),
+    ("rne_output", "extract", "作るファイルの名前",
+     "拡張子は付けない。KURAIRE なら「KURAIRE.sqlite3」ができる。", "text"),
+    ("rneconverter_dir", "extract", "RNEConverter のフォルダ",
+     "SymNavi を動かして RNE を実行するツールの場所（start_app.py があるフォルダ）。"
+     "SymNavi の ID・パスワードは RNEConverter の設定画面で登録する。", "dir"),
+    ("shared_dir", "store", "共有フォルダ",
+     "取り込んだ倉入実績（月ごとに蓄積）・グループの条件表・手動訂正を置く。全 PC で同じ場所にすると、"
+     "全員が同じ集計を見る。空欄ならこの PC の中だけに保存（試用）。", "dir"),
+    ("export_dir", "output", "CSV の書き出し先",
+     "月の集計・明細・年の集計の「CSV に」ボタンで書くフォルダ。", "dir"),
+    ("log_dir", "output", "ログの保存先",
+     "動きの記録。困った時に原因を追うために使う。共有フォルダにすると全 PC の分を 1 か所で見られる。", "dir"),
+    ("python_exe", "advanced", "Python",
+     "RNEConverter を動かす python.exe。空欄ならこのツールと同じ Python。", "file:.exe"),
+    ("source_table", "advanced", "作るファイルの中の表の名前", "既定は「倉入実績」。", "text"),
+    ("auto_import", "advanced", "新しいファイルができていたら自動で取り込む",
+     "別の PC が「データ更新」した時も、画面を開いていれば取り込む。", "bool"),
 ]
-PATH_KEYS = [k for k, _, _, kind in EDITABLE if kind == "dir" or kind.startswith("file")]
+PATH_KEYS = [k for k, _, _, _, kind in EDITABLE if kind == "dir" or kind.startswith("file")]
+
+
+def source_file(output_dir: str, name: str) -> str:
+    """取り込むファイル = 作ったファイルを置くフォルダ + 作るファイルの名前 + .sqlite3。"""
+    if not output_dir or not name:
+        return ""
+    return str(Path(output_dir) / f"{name}.sqlite3")
 
 
 class SettingsError(ValueError):
     pass
+
+
+class SettingsInputError(ValueError):
+    """入力の誤り（422）。"""
 
 
 def expand(value: str, paths: Paths) -> str:
@@ -121,8 +151,10 @@ class Settings:
     def resolved(self) -> Dict[str, Any]:
         s = self.load()
         out = copy.deepcopy(s)
-        for k in ("shared_dir", "source_path", "rneconverter_dir", "export_dir", "log_dir", "python_exe"):
+        for k in ("shared_dir", "rne_path", "rne_output_dir", "rneconverter_dir", "export_dir", "log_dir", "python_exe"):
             out[k] = expand(s.get(k, ""), self.paths)
+        out["rne_output"] = str(s.get("rne_output") or "").strip()
+        out["source_path"] = source_file(out["rne_output_dir"], out["rne_output"])
         out["shared_configured"] = bool(out["shared_dir"])
         if not out["shared_dir"]:
             out["shared_dir"] = str(self.paths.base / "shared")
@@ -131,7 +163,7 @@ class Settings:
     def save(self, changes: Dict[str, Any], base_rev: str) -> Tuple[str, List[str]]:
         if base_rev != self.revision():
             raise SettingsError("別のタブで設定が保存されています。読み直してから変更してください。")
-        allowed = {k for k, _, _, _ in EDITABLE}
+        allowed = {k for k, _, _, _, _ in EDITABLE}
         cur = self._user()
         defaults = self._defaults()
         log_lines = []
@@ -142,6 +174,10 @@ class Settings:
                 v = bool(v)
             else:
                 v = str(v or "").strip().strip('"')
+                if k == "rne_output":
+                    v = v[:-8] if v.lower().endswith(".sqlite3") else v
+                    if any(ch in v for ch in '\\/:*?"<>|'):
+                        raise SettingsInputError("作るファイルの名前に使えない文字があります（\\ / : * ? \" < > |）。")
             before = cur.get(k, defaults.get(k))
             if v == defaults.get(k):
                 cur.pop(k, None)
