@@ -1,0 +1,33 @@
+/*
+  tokens.actuals.css — このツールで足した色（tokens.css と同じ 3 状態の形）
+
+  グラフの重量（棒）と枚数（線）。旧 ｸﾞﾗﾌ シートと同じく「重量は棒、枚数は線」。
+  棒は実行の青（--act-run）の系統、線は印刷の橙（--act-print）の系統から取り、
+  python-web-tools の色の意味と衝突しないよう、塗りは淡く・線ははっきりさせる。
+*/
+:root{
+  --chart-weight:#5d8fd0;
+  --chart-count:#923d23;
+  --chart-grid:#e3eaee;
+  --chart-axis:#5b6d79;
+  --cell-zero:#a8b6bf;
+  --row-unclassified:#fff6ec;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --chart-weight:#4f7fbf;
+    --chart-count:#f0a07a;
+    --chart-grid:#26313a;
+    --chart-axis:#95a7b2;
+    --cell-zero:#4c5b66;
+    --row-unclassified:#2c2116;
+  }
+}
+:root[data-theme="dark"]{
+  --chart-weight:#4f7fbf;
+  --chart-count:#f0a07a;
+  --chart-grid:#26313a;
+  --chart-axis:#95a7b2;
+  --cell-zero:#4c5b66;
+  --row-unclassified:#2c2116;
+}

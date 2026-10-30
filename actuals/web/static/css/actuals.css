@@ -1,0 +1,126 @@
+/*
+  actuals.css — この画面だけの並べ方。色は tokens（tokens.css / tokens.actuals.css）からしか取らない。
+  部品（.card .table .btn .seg .tabs .chip .badge）は python-web-tools の components.css のものを使う。
+*/
+
+/* 本体の中は縦に流す（ページ全体は動かさない。layout.css の約束） */
+.view { display: flex; flex-direction: column; gap: 12px; padding: 16px 20px; overflow: auto; flex: 1; min-height: 0; }
+/* 流す面のカードは縮めない（縮むと中身が次のカードに重なる。python-web-tools の .tabpanel--scroll と同じ理由） */
+.view > * { flex-shrink: 0; }
+.view__head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.view__head h2 { margin-right: 4px; }
+.view__head .grow { flex: 1; }
+.monthnav { display: inline-flex; align-items: center; gap: 4px; }
+.monthnav .btn { min-width: 34px; padding-inline: 8px; }
+
+/* 月の集計: 左にグループ、右にグラフ（案A） */
+.month-top { display: grid; grid-template-columns: minmax(400px, 0.9fr) minmax(0, 2fr); gap: 12px; min-height: 0; }
+.card .pad--flush { padding: 0 0 6px; }
+.grp-table tbody tr { cursor: pointer; }
+.grp-table th:nth-child(2), .grp-table td:nth-child(2) { text-align: left; }
+.table th.t, .table td.t { text-align: left; white-space: normal; }
+.grp-table tbody tr[aria-selected="true"] td { background: var(--accent-soft); font-weight: 700; }
+.grp-table tbody tr[aria-selected="true"] td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.grp-table tbody tr.off td { color: var(--faint); }
+.grp-table tfoot td { font-weight: 700; border-top: 1px solid var(--rule); padding: var(--cell-y) var(--cell-x);
+                      text-align: right; height: var(--row-h); }
+.grp-table tfoot td:first-child { text-align: left; }
+.grp-chips { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 14px 4px; }
+.linkchip { font: inherit; font-size: var(--fs-xs); font-weight: 700; padding: 3px 10px; border-radius: var(--pill);
+            border: 1px solid currentColor; background: transparent; cursor: pointer; }
+.linkchip--warn { color: var(--warn-fg); background: var(--warn-bg); }
+.linkchip--info { color: var(--info-fg); background: var(--info-bg); }
+.linkchip--ok { color: var(--state-ok); background: var(--ok-bg); }
+
+.charts { display: flex; flex-direction: column; gap: 4px; }
+.charts--shift { display: grid; grid-template-columns: 1fr; gap: 2px; }
+.chart { width: 100%; height: auto; display: block; }
+.chart .grid { stroke: var(--chart-grid); stroke-width: 1; }
+.chart .base { stroke: var(--chart-axis); stroke-width: 1; }
+.chart .axis { fill: var(--chart-axis); font-size: 11px; font-family: var(--sans); }
+.chart rect:hover, .chart circle:hover { opacity: .75; }
+.chart__title { display: flex; gap: 12px; align-items: baseline; font-size: var(--fs-sm); font-weight: 700; padding: 0 2px; }
+.chart__title small { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.legend { display: inline-flex; gap: 12px; font-size: var(--fs-xs); color: var(--muted); font-weight: 400; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.legend i.w { background: var(--chart-weight); }
+.legend i.c { background: var(--chart-count); height: 3px; vertical-align: 2px; }
+.note { font-size: var(--fs-xs); color: var(--muted); }
+
+/* グループ×日の表（旧 月集計シート）。日の列は詰める */
+.matrix { font-size: var(--fs-xs); }
+.matrix th, .matrix td { padding: 2px 5px !important; }
+.matrix td.z { color: var(--cell-zero); }
+.matrix td.click { cursor: pointer; }
+.matrix td.click:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
+.matrix tr.total td { font-weight: 700; border-top: 1px solid var(--rule); }
+.matrix th.sun, .matrix td.sun { background: var(--sunken); }
+.matrix th:first-child, .matrix td:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+.matrix thead th:first-child { z-index: 2; background: var(--raised); }
+.tablewrap--tall { max-height: 420px; }
+.tablewrap--mid { max-height: 300px; }
+
+/* 右から出る引き出し（ロットの一覧・判定の経過） */
+.drawer { position: fixed; top: 56px; right: 0; bottom: 0; width: min(760px, 62vw); z-index: 30;
+          background: var(--surface); border-left: 1px solid var(--rule); box-shadow: var(--shadow-pop);
+          display: flex; flex-direction: column; }
+.drawer__head { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+                padding: 10px 16px; border-bottom: 1px solid var(--rule); }
+.drawer__head h3 { font-size: var(--fs-lg); }
+.drawer__body { padding: 12px 16px; overflow: auto; display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; }
+.drawer__body > * { flex-shrink: 0; }
+.trace th:nth-child(2), .trace td:nth-child(2), .trace td:last-child { text-align: left; }
+.trace td.ok { color: var(--state-ok); font-weight: 700; text-align: center; }
+.trace td.ng { color: var(--state-error); font-weight: 700; text-align: center; }
+.trace td.na { color: var(--faint); text-align: center; }
+.trace tr.hit td { background: var(--accent-soft); }
+.trace tr.nothit td { background: var(--warn-bg); }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: var(--fs-sm); }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.verdict { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; font-size: var(--fs-md); }
+.verdict b { font-size: var(--fs-lg); }
+
+/* 条件表（旧 設定シート） */
+.cond-table input { width: 100%; min-width: 52px; font: inherit; font-family: var(--mono); font-size: var(--fs-xs);
+                    padding: 2px 4px; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface);
+                    color: var(--ink); text-align: right; }
+.cond-table input.name { min-width: 120px; text-align: left; font-family: var(--sans); }
+.cond-table input.mat { min-width: 60px; text-align: left; }
+.cond-table input.flag { min-width: 30px; text-align: center; }
+.cond-table input[data-changed="1"] { background: var(--info-bg); border-color: var(--state-info); }
+.cond-table input[data-bad="1"] { background: var(--warn-bg); border-color: var(--state-error); }
+.cond-table th.not, .cond-table td.not { background: var(--sunken); }
+.cond-table thead tr:first-child th { text-align: center; }
+.formrow { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; font-size: var(--fs-sm); }
+.formrow label { display: inline-flex; gap: 6px; align-items: center; }
+.problems { color: var(--state-error); font-size: var(--fs-sm); white-space: pre-wrap; }
+
+/* データ・設定 */
+.stack { display: flex; flex-direction: column; gap: 8px; }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: var(--fs-sm); }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; word-break: break-all; }
+.st-dot { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; }
+.st-dot::before { content: "●"; font-size: 9px; }
+.st-dot.ok { color: var(--state-ok); }
+.st-dot.ng { color: var(--state-error); }
+.st-dot.warn { color: var(--state-warn); }
+textarea.input { width: 100%; min-height: 120px; font-family: var(--mono); font-size: var(--fs-xs); }
+.input--wide { width: min(640px, 100%); }
+.loglines { font-family: var(--mono); font-size: var(--fs-xs); background: var(--sunken); border-radius: var(--radius-xs);
+            padding: 8px 10px; max-height: 220px; overflow: auto; white-space: pre-wrap; }
+.empty { padding: 28px; text-align: center; color: var(--muted); }
+.unclassified-row td { background: var(--row-unclassified); }
+
+/* 印刷: 月集計とグラフを A4 横に（帯・レール・ボタンは出さない） */
+@media print {
+  @page { size: A4 landscape; margin: 8mm; }
+  html, body { height: auto; overflow: visible; }
+  .ribbon, .rail, .offline, .busyband, .drawer, .toasts, .noprint, .btn, .seg { display: none !important; }
+  .shell { display: block; height: auto; padding: 0; }
+  .work { border: 0; box-shadow: none; overflow: visible; }
+  .view { overflow: visible; padding: 0; }
+  .tablewrap { max-height: none !important; overflow: visible; }
+  .month-top { grid-template-columns: 0.8fr 2fr; }
+}

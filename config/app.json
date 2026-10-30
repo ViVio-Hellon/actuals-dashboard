@@ -1,0 +1,12 @@
+{
+  "app_id": "actuals-dashboard",
+  "display_name": "倉入実績集計",
+  "version": "0.1.0",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8751,
+    "port_retry": 5,
+    "idle_exit_minutes": 720,
+    "open_browser": true
+  }
+}
