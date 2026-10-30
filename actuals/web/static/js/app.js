@@ -56,11 +56,11 @@ function ribbon() {
     $("#rb-shared-slot").title = `共有フォルダ: ${s.shared.dir}`;
     const run = s.rne;
     $("#rb-running").hidden = !run.running;
-    $("#rb-run-how").textContent = run.running ? `RNEConverter ${run.elapsed} 秒` : "";
+    $("#rb-run-how").textContent = run.running ? `${run.progress}%・${run.elapsed} 秒・${run.step}` : "";
     $("#rneRun").disabled = run.running;
     const un = $("#badge-data");
-    un.hidden = !(s.source && s.source.pending);
-    un.textContent = "新";
+    un.hidden = s.rne.ok !== false;          // 前回のデータ更新が失敗した時だけ印を出す
+    un.textContent = "!";
     const stale = $("#staleband");
     const msgs = [];
     if (!s.shared.configured) msgs.push("共有フォルダが未設定のため、条件表・手動訂正・取り込んだ実績はこの PC の中だけに保存しています（設定画面で指定してください）。");
@@ -120,20 +120,11 @@ async function pollState(force = false) {
     }
     if (offline) { offline = false; $("#offline").hidden = true; }
     ribbon();
-    // 新しいデータが出ていれば自動で取り込む（設定で切れる）
-    if (s.auto_import && s.source.pending && !s.rne.running) {
-      const res = await api.post("/api/import/auto", {}, "新しいデータを取り込んでいます…");
-      if (res && res.import_id) {
-        toast(`新しいデータを取り込みました（${res.rows} 件: 追加 ${res.added}・更新 ${res.changed}）`, "ok");
-        return pollState(true);
-      }
-      if (res && res.error) toast(`自動の取り込みができませんでした: ${res.error}`, "warn");
-    }
     const newImport = s.history.last && s.history.last.id;
     if (wasRunning && !s.rne.running) {
       const r = s.rne;
-      if (r.rc === 0 || r.rc === 1) toast(`データ更新が終わりました（${r.rc_text}）`, r.rc === 0 ? "ok" : "warn");
-      else toast(`データ更新ができませんでした: ${r.rc_text}`, "error");
+      if (r.ok) toast(`データ更新が終わりました（${r.step}）`, "ok");
+      else toast(`データ更新ができませんでした: ${r.message}`, "error");
     }
     if (force || (prevImport && newImport !== prevImport) || (wasRunning && !s.rne.running)) {
       if (!ctx.dirty) await render();
@@ -158,14 +149,14 @@ function initTheme() {
 async function runRne() {
   const s = ctx.state;
   if (s && !s.rne.configured) {
-    toast("データ更新に使う RNE ファイルか RNEConverter のフォルダが未設定です。設定画面の「パスの設定 ①」で指定してください。", "warn");
+    toast("データ更新に使う RNE ファイルか、SymNavi の ID・パスワードが未設定です。「パスの設定」で指定してください。", "warn");
     location.hash = "#settings";
     return;
   }
-  if (!(await confirmBox(`SymNavi で「${s ? s.rne.rne_name : ""}」を実行して当月の倉入実績を取り出し、\n${s ? s.rne.source : ""} を作ってから取り込みます。\nSymNavi が起動します。よろしいですか？`, { ok: "データ更新" }))) return;
+  if (!(await confirmBox(`SymNavi で「${s ? s.rne.rne_name : ""}」を実行して当月の倉入実績を取り出し、取り込みます。\nSymNavi が起動します（数十秒〜2 分ほど）。よろしいですか？`, { ok: "データ更新" }))) return;
   try {
     await api.post("/api/rne/run", {});
-    toast("データ更新を始めました。終わったら自動で取り込みます。", "info");
+    toast("データ更新を始めました。進み具合は上の帯と「データ」画面に出ます。", "info");
     await pollState();
     const t = setInterval(async () => {
       await pollState();

@@ -48,22 +48,6 @@ class PathsCheck(unittest.TestCase):
         self.assertTrue((self.tmp / "share").is_dir())
         self.assertEqual(P.check_all({"export_dir": "{DATA}/export"}, self.paths)["export_dir"]["state"], "ok")
 
-    def test_source_is_folder_plus_name(self):
-        res = P.check_all({"rne_output_dir": str(self.tmp), "rne_output": "KURAIRE.sqlite3"}, self.paths)
-        self.assertEqual(Path(res["source"]["path"]), self.tmp / "KURAIRE.sqlite3")      # .sqlite3 を付けても同じ
-        self.assertEqual(res["source"]["state"], "warn")                                 # まだ無い = データ更新の前
-        self.assertEqual(res["rne_output_dir"]["state"], "ok")
-        sqlite3.connect(str(self.tmp / "KURAIRE.sqlite3")).execute("CREATE TABLE t (a)").connection.close()
-        res = P.check_all({"rne_output_dir": str(self.tmp), "rne_output": "KURAIRE"}, self.paths)
-        self.assertEqual(res["source"]["state"], "ok")
-        bad = P.check_all({"rne_output_dir": str(self.tmp), "rne_output": "A:B"}, self.paths)
-        self.assertEqual(bad["rne_output"]["state"], "missing")
-        none = P.check_all({}, self.paths)
-        self.assertEqual((none["source"]["path"], none["source"]["state"]), ("", "missing"))
-        self.assertEqual(none["rne_output_dir"]["state"], "missing")
-        self.assertEqual(P.check_all({"rne_output_dir": str(self.tmp / "no")}, self.paths)["rne_output_dir"]["state"],
-                         "missing")                                                      # 置くフォルダは作らない
-
     def test_rne_file(self):
         self.assertEqual(P.check_rne("", self.paths)["state"], "missing")
         rne = self.tmp / "梱包実績(当月_倉入れ日付順).RNE"
@@ -71,29 +55,40 @@ class PathsCheck(unittest.TestCase):
         rne.write_text("x", encoding="utf-8")
         self.assertEqual(P.check_rne(str(rne), self.paths)["state"], "ok")
 
-    def _rneconverter(self, new=True, cred=True):
-        root = self.tmp / "RNEConverter"
-        (root / "app").mkdir(parents=True, exist_ok=True)
-        (root / "start_app.py").write_text("")
-        (root / "app" / "main.py").write_text('ap.add_argument("--rne")' if new else 'ap.add_argument("--only")')
-        if cred:
-            d = self.tmp / "rnehome" / "config"
-            d.mkdir(parents=True, exist_ok=True)
-            (d / "credentials.json").write_text(json.dumps({"id": "u", "pass": "p"}))
-        return root
+    def test_check_all(self):
+        exe = self.tmp / "SymNavi.exe"
+        exe.write_text("x")
+        res = P.check_all({"symnavi_exe": str(exe), "symnavi_server": "NlmFaNgyNavd", "work_dir": "{DATA}/work",
+                           "cscript_path": str(self.tmp / "no.exe")}, self.paths)
+        self.assertEqual(res["symnavi_exe"]["state"], "ok")
+        self.assertEqual(res["symnavi_server"]["state"], "ok")
+        self.assertEqual(res["work_dir"]["state"], "ok")
+        self.assertEqual(res["cscript_path"]["state"], "warn")                         # 予備なので無くても警告だけ
+        self.assertEqual(res["credentials"]["state"], "missing")
+        self.assertEqual(P.check_all({"symnavi_server": "X"}, self.paths)["symnavi_server"]["state"], "warn")
 
-    def test_rneconverter_ready(self):
-        self.assertEqual(P.rneconverter_status(str(self._rneconverter()), self.paths)["state"], "ok")
+    def test_work_dir_not_in_localappdata(self):
+        old = os.environ.get("LOCALAPPDATA")
+        os.environ["LOCALAPPDATA"] = str(self.tmp / "AppData")
+        try:
+            self.assertEqual(P.check_work(str(self.tmp / "AppData" / "w"), self.paths)["state"], "missing")
+        finally:
+            if old is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = old
 
-    def test_rneconverter_old_version_and_no_login(self):
-        r = P.rneconverter_status(str(self._rneconverter(new=False, cred=False)), self.paths)
-        self.assertEqual(r["state"], "missing")
-        self.assertEqual({x["label"]: x["state"] for x in r["rows"]},
-                         {"RNEConverter の版": "missing", "SymNavi のログイン": "missing"})
-
-    def test_rneconverter_not_set(self):
-        self.assertEqual(P.rneconverter_status("", self.paths)["state"], "missing")
-        self.assertEqual(P.rneconverter_status(str(self.tmp), self.paths)["state"], "missing")
+    def test_credentials_fallback_to_rneconverter(self):
+        from actuals import credentials as CR
+        self.assertFalse(CR.status(self.paths)["ready"])
+        d = self.tmp / "rnehome" / "config"
+        d.mkdir(parents=True)
+        (d / "credentials.json").write_text(json.dumps({"id": "rc", "pass": "p"}))
+        st = CR.status(self.paths)
+        self.assertEqual((st["ready"], st["id"]), (True, "rc"))
+        self.assertIn("RNEConverter", st["source"])
+        CR.save(self.paths, "own", "p2")
+        self.assertEqual(CR.status(self.paths)["id"], "own")                           # このツールの登録が先
 
 
 class Stop(unittest.TestCase):
@@ -149,59 +144,103 @@ if __name__ == "__main__":
 
 
 class DataUpdate(unittest.TestCase):
-    """「データ更新」: RNE ファイル・置くフォルダ・名前を RNEConverter に渡し、できたファイルを取り込む。"""
+    """「データ更新」: SymNavi で取り出した行を、そのまま共有の蓄積に取り込む（SymNavi の部分だけ差し替える）。"""
 
-    def test_runs_rneconverter_and_imports(self):
+    def _service(self, tmp, cred=True):
+        from actuals import credentials as CR
         from actuals.service import Service
-        from tests.helpers import golden, write_source
+        rne = tmp / "梱包実績(当月_倉入れ日付順).RNE"
+        rne.write_text("x", encoding="utf-8")
+        exe = tmp / "SymNavi.exe"
+        exe.write_text("x")
+        home = tmp / "home"
+        (home / "config").mkdir(parents=True)
+        (home / "config" / "settings.json").write_text(json.dumps({
+            "shared_dir": str(tmp / "share"), "rne_path": str(rne), "symnavi_exe": str(exe),
+            "work_dir": str(tmp / "work")}, ensure_ascii=False), encoding="utf-8")
+        paths = Paths(home)
+        if cred:
+            CR.save(paths, "u", "p")
+        return Service(paths), rne, exe
+
+    def test_extracts_and_imports(self):
+        from actuals import rne_runner
+        from tests.helpers import golden
         tmp = Path(tempfile.mkdtemp())
+        old = rne_runner.extract_rows
+        seen = {}
         try:
             g = golden()
-            made = write_source(tmp / "made.sqlite3", g["header"], g["rows"][:50])
-            fake = tmp / "RNEConverter"
-            fake.mkdir()
-            # 偽の RNEConverter: 受け取った引数を記録し、--save-dir に --output.sqlite3 を置く
-            (fake / "start_app.py").write_text(
-                "import json, shutil, sys\n"
-                "a = sys.argv[1:]\n"
-                "v = {a[i]: a[i + 1] for i in range(0, len(a) - 1) if a[i].startswith('--')}\n"
-                f"json.dump(a, open(r'{tmp / 'args.json'}', 'w', encoding='utf-8'), ensure_ascii=False)\n"
-                f"shutil.copyfile(r'{made}', v['--save-dir'] + '/' + v['--output'] + '.sqlite3')\n"
-                "print('ok')\n", encoding="utf-8")
-            rne = tmp / "梱包実績(当月_倉入れ日付順).RNE"
-            rne.write_text("x", encoding="utf-8")
-            out = tmp / "out"
-            out.mkdir()
-            home = tmp / "home"
-            (home / "config").mkdir(parents=True)
-            (home / "config" / "settings.json").write_text(json.dumps({
-                "shared_dir": str(tmp / "share"), "rne_path": str(rne), "rne_output_dir": str(out),
-                "rne_output": "KURAIRE", "rneconverter_dir": str(fake), "python_exe": sys.executable},
-                ensure_ascii=False), encoding="utf-8")
-            svc = Service(Paths(home))
-            svc.run_rne()
+
+            def fake(rne_path, work_dir, exe, server, cred, startup, wait, cscript, report):
+                seen.update(rne=rne_path, exe=exe, server=server, cred=dict(cred), work=work_dir)
+                report(0.5, "SymNavi の結果を読み込んでいます")
+                rows = [{k: ("" if v is None else str(v)) for k, v in r.items()} for r in g["rows"][:50]]
+                return {"columns": g["header"], "rows": rows}
+            rne_runner.extract_rows = fake
+            os.environ["RNE_CONVERTER_HOME"] = str(tmp / "rnehome")
+            svc, rne, exe = self._service(tmp)
+            svc.run_update()
             for _ in range(100):
-                if svc.rne.rc is not None:
+                if svc.rne.ok is not None:
                     break
-                time.sleep(0.1)
-            self.assertEqual(svc.rne.rc, 0)
-            args = json.loads((tmp / "args.json").read_text(encoding="utf-8"))
-            self.assertEqual(args[:6], ["--rne", str(rne), "--output", "KURAIRE", "--save-dir", str(out)])
-            self.assertIn("--table", args)
-            self.assertEqual(svc.rne.after.get("rows"), 50)                    # 終わったら取り込んでいる
+                time.sleep(0.05)
+            self.assertTrue(svc.rne.ok, svc.rne.message)
+            self.assertEqual((seen["rne"], seen["exe"], seen["server"], seen["cred"]),
+                             (rne, str(exe), "NlmFaNgyNavd", {"id": "u", "pass": "p"}))
             self.assertEqual(svc.history.summary()["lots"], 50)
+            self.assertEqual(svc.history.summary()["last"]["kind"], "symnavi")
+            self.assertEqual(svc.rne.status()["progress"], 100)
         finally:
+            rne_runner.extract_rows = old
+            os.environ.pop("RNE_CONVERTER_HOME", None)
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_refuses_without_rne(self):
-        from actuals.service import Service, UserError
+    def test_failure_is_reported(self):
+        from actuals import rne_runner
+        tmp = Path(tempfile.mkdtemp())
+        old = rne_runner.extract_rows
+        try:
+            def boom(*a, **k):
+                raise RuntimeError("SymNavi の結果が届きません（時間切れ）")
+            rne_runner.extract_rows = boom
+            os.environ["RNE_CONVERTER_HOME"] = str(tmp / "rnehome")
+            svc, _, _ = self._service(tmp)
+            svc.run_update()
+            for _ in range(100):
+                if svc.rne.ok is not None:
+                    break
+                time.sleep(0.05)
+            self.assertFalse(svc.rne.ok)
+            self.assertIn("時間切れ", svc.rne.status()["message"])
+            self.assertEqual(svc.history.summary()["lots"], 0)
+        finally:
+            rne_runner.extract_rows = old
+            os.environ.pop("RNE_CONVERTER_HOME", None)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_refuses_without_settings(self):
+        from actuals.service import UserError
         tmp = Path(tempfile.mkdtemp())
         try:
-            home = tmp / "home"
-            (home / "config").mkdir(parents=True)
-            (home / "config" / "settings.json").write_text(json.dumps({"shared_dir": str(tmp / "s")}), encoding="utf-8")
+            os.environ["RNE_CONVERTER_HOME"] = str(tmp / "rnehome")
+            svc, rne, _ = self._service(tmp, cred=False)
+            rne.unlink()
             with self.assertRaises(UserError) as cm:
-                Service(Paths(home)).run_rne()
-            self.assertIn("パスの設定 ①", str(cm.exception))
+                svc.run_update()
+            self.assertIn("RNE ファイルが見つかりません", str(cm.exception))
+            self.assertIn("ID・パスワードが未登録", str(cm.exception))
         finally:
+            os.environ.pop("RNE_CONVERTER_HOME", None)
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_copied_symnavi_code_imports(self):
+        """写した SymNavi のコードが読み込めて、元（RNEConverter）と同じ設定の既定値を持つ。"""
+        from actuals.symnavi.config import SymNaviConfig
+        from actuals.symnavi.extract.symnavi import SymNaviExtractor  # noqa: F401
+        c = SymNaviConfig()
+        self.assertEqual((c.exe, c.server, c.args), (r"C:\NAVICL\bin\SymNavi.exe", "NlmFaNgyNavd", "-d -u"))
+
+
+if __name__ == "__main__":
+    unittest.main()

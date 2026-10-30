@@ -2,10 +2,9 @@
   設定（この PC の設定）
 
   「パスの設定」はデータの流れの順に並べる:
-    ① データ更新   RNE ファイル → RNEConverter（SymNavi）→ 置くフォルダ\名前.sqlite3 … ここから取り込む
+    ① データ更新   RNE ファイル → SymNavi（このツールが動かす）→ 取り出した倉入実績
     ② 集計データの置き場所   共有フォルダ（蓄積した実績・条件表・手動訂正）
     ③ 書き出しと記録   CSV・ログ
-  取り込むファイルは入力しない（①の置くフォルダ + 名前 から決まる）。
   入力を変えると、保存の前に確かめる（ある・書ける・中身が合っている）。
 */
 import { api } from "../api.js";
@@ -25,9 +24,9 @@ function stateCell(r) {
 const FLOW = `
   <div class="flowline" aria-label="データの流れ">
     <span class="flowline__box"><b>RNE ファイル</b><small>梱包実績(当月_倉入れ日付順).RNE</small></span>
-    <span class="flowline__arrow">→ SymNavi<br>（RNEConverter）→</span>
-    <span class="flowline__box"><b>作ったファイル</b><small>置くフォルダ \\ 名前.sqlite3</small></span>
-    <span class="flowline__arrow">→ 取り込み →</span>
+    <span class="flowline__arrow">→ SymNavi で実行<br>（ID・パスワード）→</span>
+    <span class="flowline__box"><b>当月の倉入実績</b><small>そのまま取り込む</small></span>
+    <span class="flowline__arrow">→</span>
     <span class="flowline__box"><b>共有フォルダ</b><small>月ごとに蓄積・条件表・手動訂正</small></span>
     <span class="flowline__arrow">→</span>
     <span class="flowline__box"><b>集計画面・CSV</b><small>CSV は書き出し先へ</small></span>
@@ -40,20 +39,24 @@ export async function render(main, ctx, stale) {
   const val = (k) => v.values[k] ?? "";
   const row = (f, i) => `<tr data-key="${f.key}">
       <th class="t"><span class="paths__no">${i}</span>${esc(f.label)}<div class="note">${esc(f.note)}</div></th>
-      <td class="t">${f.kind === "bool"
-        ? `<label><input type="checkbox" data-key="${f.key}" ${val(f.key) ? "checked" : ""}> する</label>`
-        : `<input class="input paths__input" data-key="${f.key}" value="${esc(val(f.key))}" spellcheck="false">
-           <div class="note" data-res="${f.key}"></div>`}</td>
+      <td class="t"><input class="input paths__input" data-key="${f.key}" value="${esc(val(f.key))}" spellcheck="false"
+           ${f.kind === "number" ? 'inputmode="numeric" style="max-width:8em"' : ""}>
+           <div class="note" data-res="${f.key}"></div></td>
       <td class="t nowrap">${isPath(f) ? `<button class="btn btn--sm" type="button" data-pick="${f.key}" data-kind="${esc(f.kind)}">選ぶ…</button>
           <button class="btn btn--sm" type="button" data-open="${f.key}" title="エクスプローラーで開く">開く</button>` : ""}</td>
-      <td class="t paths__state" data-state="${f.key}">${f.kind === "bool" ? "" : stateCell(null)}</td></tr>`;
+      <td class="t paths__state" data-state="${f.key}">${f.kind === "number" ? "" : stateCell(null)}</td></tr>`;
   const section = (g) => {
     const fs = v.fields.filter((f) => f.group === g);
     let n = 0;
     const rows = fs.map((f) => row(f, `${{ extract: "①", store: "②", output: "③", advanced: "" }[g]}${fs.length > 1 && g !== "advanced" ? `-${++n}` : ""}`)).join("");
     const extra = g === "extract" ? `
-      <tr class="paths__derived"><th class="t">→ 取り込むファイル<div class="note">①-2 と ①-3 から決まります。このツールはこのファイルを取り込みます。</div></th>
-        <td class="t mono" id="srcPath"></td><td></td><td class="t paths__state" data-state="source">${stateCell(null)}</td></tr>` : "";
+      <tr data-key="credentials"><th class="t"><span class="paths__no">①-${fs.length + 1}</span>SymNavi のログイン
+          <div class="note">SymNavi に入る ID とパスワード（旧ブックではフォームに書かれていたもの）。この PC にだけ保存し、画面やログには出しません。</div></th>
+        <td class="t"><div class="formrow">
+            <input class="input" id="credId" value="${esc(v.credentials.id)}" placeholder="ID" autocomplete="off" spellcheck="false">
+            <input class="input" id="credPass" type="password" placeholder="${v.credentials.has_password ? "（登録済み。変える時だけ入力）" : "パスワード"}" autocomplete="new-password">
+            <button class="btn btn--sm btn--commit" type="button" id="credSave">登録</button></div></td>
+        <td></td><td class="t paths__state" data-state="credentials">${stateCell(null)}</td></tr>` : "";
     return `<section class="card"><header><h3>${esc(v.groups[g])}</h3></header>
       <div class="pad pad--flush"><table class="table paths">
         <thead><tr><th class="t">何に使うか</th><th class="t">場所</th><th></th><th class="t">状態</th></tr></thead>
@@ -69,8 +72,6 @@ export async function render(main, ctx, stale) {
     <section class="card"><div class="pad">${FLOW}
       <p class="note">「選ぶ…」でフォルダを辿って選べます（\\\\サーバー\\共有 のように直接入力もできます）。入力を変えると右の「状態」がすぐに変わります。保存するまで反映されません。</p></div></section>
     ${section("extract")}
-    <section class="card" id="rneCard"><header><h3>RNEConverter の状態</h3><span class="note" id="rneMsg"></span></header>
-      <div class="pad pad--flush"><table class="table"><tbody id="rneRows"></tbody></table></div></section>
     ${section("store")}
     ${section("output")}
     <details class="card"><summary class="pad"><b>${esc(v.groups.advanced)}</b></summary>
@@ -78,7 +79,6 @@ export async function render(main, ctx, stale) {
     <section class="card"><header><h3>いまの状態</h3></header><div class="pad">
       <dl class="facts">
         <dt>いま使っている共有フォルダ</dt><dd>${esc(v.resolved.shared_dir)}${v.resolved.shared_configured ? "" : "（未設定のため、この PC の中）"}</dd>
-        <dt>いま取り込んでいるファイル</dt><dd>${esc(v.resolved.source_path || "（未設定）")}</dd>
         <dt>いま書いているログ</dt><dd>${esc(v.log_dir)}</dd>
         <dt>設定の既定値</dt><dd>ツールのフォルダの config\\settings.json（ここで変えた項目だけ、データの場所の config\\settings.json に残ります。全 PC に同じ既定を配る時はツール側を書き換えて配ります）</dd>
       </dl></div></section>
@@ -86,7 +86,7 @@ export async function render(main, ctx, stale) {
 
   const collect = () => {
     const values = {};
-    for (const el of main.querySelectorAll("input[data-key]")) values[el.dataset.key] = el.type === "checkbox" ? el.checked : el.value;
+    for (const el of main.querySelectorAll("input[data-key]")) values[el.dataset.key] = el.value;
     return values;
   };
   let seq = 0;
@@ -102,21 +102,13 @@ export async function render(main, ctx, stale) {
       if (my !== seq) return;
       for (const [k, r] of Object.entries(res)) {
         const cell = main.querySelector(`[data-state="${k}"]`);
-        if (cell && k !== "rneconverter_dir") cell.innerHTML = stateCell(r);
+        if (cell) cell.innerHTML = stateCell(r);
       }
-      main.querySelector('[data-state="rneconverter_dir"]').innerHTML = stateCell(res.rneconverter_dir);
-      $("#srcPath").textContent = res.source.path || "（未定）";
-      const rr = res.rneconverter_dir;
-      $("#rneMsg").textContent = rr.message;
-      $("#rneRows").innerHTML = (rr.rows || []).map((x) => `<tr><th class="t" style="width:24%">${esc(x.label)}</th>
-        <td class="t">${esc(x.value)}${x.note ? `<div class="note">${esc(x.note)}</div>` : ""}</td>
-        <td class="t" style="width:14%"><span class="st-dot ${STATE_CLS[x.state] || "warn"}">${esc(STATE_TEXT[x.state] || x.state)}</span></td></tr>`).join("")
-        || `<tr><td class="t">${esc(rr.message)}</td></tr>`;
     } catch (e) { toastError(e); }
   };
   let timer = null;
   for (const el of main.querySelectorAll("input[data-key]")) {
-    el.addEventListener(el.type === "checkbox" ? "change" : "input", () => {
+    el.addEventListener("input", () => {
       ctx.dirty = true;
       clearTimeout(timer);
       timer = setTimeout(check, 500);
@@ -146,6 +138,16 @@ export async function render(main, ctx, stale) {
     });
   }
   $("#recheck").addEventListener("click", check);
+  $("#credSave").addEventListener("click", async () => {
+    try {
+      const r = await api.post("/api/credentials", { id: $("#credId").value, password: $("#credPass").value });
+      $("#credPass").value = "";
+      $("#credPass").placeholder = "（登録済み。変える時だけ入力）";
+      toast(`SymNavi のログインを登録しました（ID ${r.id}）。`, "ok");
+      await ctx.reloadState();
+      check();
+    } catch (e) { toastError(e); }
+  });
   $("#save").addEventListener("click", async () => {
     try {
       await api.post("/api/settings", { values: collect(), revision: v.revision }, "保存しています…");

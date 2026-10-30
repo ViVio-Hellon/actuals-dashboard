@@ -65,7 +65,7 @@ def read_sqlite(path: Path, cache_dir: Path, table: str = "") -> Dict[str, Any]:
         raise SourceError(f"取り込み元を読めません（壊れているか SQLite ではありません）: {e}") from e
     finally:
         conn.close()
-    fingerprint = f"{fp[0]}-{fp[1]}"   # 写す直前の（大きさ・更新時刻）。service.source_status と同じ形
+    fingerprint = f"{fp[0]}-{fp[1]}"   # 写す直前の（大きさ・更新時刻）
     return {"columns": columns, "rows": rows, "meta": meta, "fingerprint": fingerprint, "table": t}
 
 

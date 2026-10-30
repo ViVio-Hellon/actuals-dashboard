@@ -4,7 +4,8 @@
 重量と枚数を集計する）を、ブラウザで使う業務ツールに置き換えたものです。
 
 - **Python 標準ライブラリだけ**で動きます（http.server / sqlite3 / csv / logging / subprocess）。追加パッケージ不要。
-- **SymNavi の処理は持ちません。** 倉入実績の抽出は RNEConverter に任せ、出力された `KURAIRE.sqlite3` を取り込みます。
+- **SymNavi からの取り出しもこのツールの中で行います。** 「データ更新」で SymNavi を起動し、RNE を実行して当月の倉入実績を取り出し、
+  そのまま共有の蓄積に取り込みます（SymNavi とのやり取りは RNEConverter のものを `actuals/symnavi/` に写して使用。RNEConverter は不要）。
 - 見た目・部品・決まりは **python-web-tools**（梱包資材総合ツール）と同じです（tokens.css / components.css / toast / askbox、
   エラー応答の形、ログの決まり、`config/app.json`）。
 - 判定・計算・集計は旧 VBA と同じ結果になることを、受領ブックの保存値（987 件）と全件照合しています。
@@ -14,12 +15,13 @@
 ```
 Python（標準ライブラリだけ）
   ├─ http.server ── ブラウザ画面（127.0.0.1、起動ごとのトークン）
-  ├─ sqlite3 ────── KURAIRE.sqlite3（RNEConverter の出力）を手元に写して読む
-  │                 共有フォルダ: 条件表・手動訂正（actuals_master.sqlite3）／蓄積した実績（actuals_history.sqlite3）
+  ├─ sqlite3 ────── 共有フォルダ: 条件表・手動訂正（actuals_master.sqlite3）／蓄積した実績（actuals_history.sqlite3）
   ├─ csv ────────── 月集計・明細・年集計を指定フォルダへ書き出し（ダウンロードはしない）
   ├─ logging ────── <ログの保存先>\actuals-dashboard\actuals-dashboard_<PC>_<日付>.log
-  └─ subprocess ─── 「データ更新」: RNEConverter（start_app.py --only KURAIRE）── SymNavi
-（Access を使わないので cscript・ADODB・ACE は使わない）
+  ├─ subprocess ─── 「データ更新」: SymNavi.exe を起動（拡張 API は PowerShell の navi_api.ps1）
+  ├─ ctypes ─────── SymNavi への DDE（Open → Save → Close。旧 VBA と同じ手順）
+  └─ cscript ────── 上の 2 つがだめな時だけ、旧 VBA と同じく Excel 経由で取り出す（予備）
+（Access は使わないので ADODB・ACE は使わない）
 ```
 
 ## 画面
@@ -30,8 +32,8 @@ Python（標準ライブラリだけ）
 | 2 年の集計 | 年度（4/1〜3/31）の月別と日別（旧 年集計）。見出しは条件表のグループ名 |
 | 3 振り分け確認 | 未分類のロット（外れた理由つき）と手動訂正の一覧。訂正はここか、ロットの引き出しから（旧 修正シート A 列） |
 | 4 条件表 | 15 グループの条件（旧 設定シート 5〜19 行）、寸法の基準（製造/ｵｰﾀﾞｰ）、判定方式。保存前に「影響を確認」 |
-| 5 データ | 取り込み元の状態、取り込みの記録、月ごとの件数、手作業の取り込み（xls・貼付け）、旧ブックからの移行 |
-| 6 設定 | 共有フォルダ、取り込み元、RNEConverter の場所、書き出し先、ログ |
+| 5 データ | データ更新（進み具合・中断）、取り込みの記録、月ごとの件数、手作業の取り込み（xls・貼付け）、旧ブックからの移行 |
+| 6 パスの設定 | RNE ファイル、SymNavi.exe・サーバー名・ログイン、共有フォルダ、書き出し先、ログ |
 
 暦（現場暦 / 太陽暦）は各画面の切替で選びます。現場暦は BOX実績_作業終了_日付で集計して直（7〜15 時 1 直、15〜23 時 2 直、他 3 直）を出し、
 太陽暦は最小の倉入完了_年月日で集計して直は出しません（旧ツールと同じ）。
@@ -39,8 +41,8 @@ Python（標準ライブラリだけ）
 ## 準備
 
 1. Python 3.8 以上（追加パッケージ不要）。
-2. RNEConverter を `claude/exciting-wright-gi2v64` ブランチ以降の版にし、SymNavi の ID・パスワードを RNEConverter の設定画面で登録する。
-3. `Start.vbs` で起動し、設定画面の「パスの設定」で次を指定する（下の節）。
+2. SymNavi（`C:\NAVICL\bin\SymNavi.exe`）が入っている PC で使う。RNEConverter は要らない。
+3. `Start.vbs` で起動し、「パスの設定」で次を指定する（下の節）。最低限は ①-1 RNE ファイル・①-4 SymNavi のログイン・② 共有フォルダ。
 4. 旧ブックがあれば、データ画面の「旧ブックからの移行」で DATA と手動訂正を取り込む
    （`start.bat --import-workbook 旧ブック.xlsm` でも可）。
 
@@ -49,24 +51,24 @@ Python（標準ライブラリだけ）
 データの流れの順に並んでいます。
 
 ```
-①-1 RNE ファイル ──SymNavi（①-4 RNEConverter）──▶ ①-2 置くフォルダ \ ①-3 名前.sqlite3 ──取り込み──▶ ② 共有フォルダ ──▶ 集計画面・③-1 CSV
+①-1 RNE ファイル ──SymNavi（①-2 本体・①-3 サーバー・①-4 ログイン）──▶ 当月の倉入実績 ──取り込み──▶ ② 共有フォルダ ──▶ 集計画面・③-1 CSV
 ```
 
 | 番号 | 項目 | 何に使うか |
 |---|---|---|
-| ①-1 | RNE ファイル | SymNavi に渡す問い合わせ。旧ブックと同じフォルダにあった `梱包実績(当月_倉入れ日付順).RNE` を選ぶ。「データ更新」でこの RNE の結果（当月の倉入実績）を取り出す |
-| ①-2 | 作ったファイルを置くフォルダ | RNEConverter が取り出した倉入実績を SQLite にして置く場所（既定 `\\nlmsrvngy03\Read\【New】仕掛\台帳`）。このツールはここから取り込む。共有フォルダなら、どの PC で更新しても全員が取り込める |
-| ①-3 | 作るファイルの名前 | 拡張子なし。`KURAIRE` なら `KURAIRE.sqlite3` |
-| ①-4 | RNEConverter のフォルダ | SymNavi を動かして RNE を実行するツール（`start_app.py` のあるフォルダ）。SymNavi の ID・パスワードは RNEConverter の設定画面で登録する |
-| → | 取り込むファイル | 入力しない。①-2 と ①-3 から決まる（`<置くフォルダ>\<名前>.sqlite3`）。「データ更新」の前は「まだありません」と出る |
-| ② | 共有フォルダ | 取り込んだ倉入実績（月ごとに蓄積）・グループの条件表・手動訂正。全 PC で同じ場所にすると全員が同じ集計を見る。空欄はこの PC の中だけ（試用） |
+| ①-1 | RNE ファイル | SymNavi に渡す問い合わせ。旧ブックと同じフォルダにあった `梱包実績(当月_倉入れ日付順).RNE` を選ぶ |
+| ①-2 | SymNavi.exe | SymNavi 本体。既定は旧ツールと同じ `C:\NAVICL\bin\SymNavi.exe` |
+| ①-3 | SymNavi のサーバー名 | 既定は旧ツールと同じ `NlmFaNgyNavd` |
+| ①-4 | SymNavi のログイン | ID とパスワード（旧ブックではフォームに直接書かれていたもの）。この PC の `<データの場所>\config\credentials.json` にだけ保存し、画面・ログ・共有フォルダには出さない。未登録でも、同じ PC の RNEConverter に登録済みならそれを使う |
+| ② | 共有フォルダ | 取り込んだ倉入実績（月ごとに蓄積）・グループの条件表・手動訂正。全 PC で同じ場所にすると、どの PC で「データ更新」しても全員が同じ集計を見る。空欄はこの PC の中だけ（試用） |
 | ③-1 | CSV の書き出し先 | 「CSV に」ボタンで書くフォルダ |
 | ③-2 | ログの保存先 | 動きの記録。共有フォルダにすると全 PC の分を 1 か所で見られる |
+| 詳細 | 作業フォルダ・待ち時間・cscript.exe | SymNavi の結果を一時的に置く場所（既定 `{DATA}\work`）、SymNavi の起動待ち（20 秒）・結果待ち（120 秒）、予備の Excel 経由で使う cscript.exe |
 
-- 「選ぶ…」でフォルダを辿って選べます（`\\サーバー\共有` を上の欄に打って「開く」でも辿れます）。「開く」はエクスプローラーで開きます。
-- 入力を変えると、保存する前に右の「状態」が変わります（ある・書ける・中身が合っている）。RNEConverter については、新しい版か・SymNavi のログインが登録済みかも出します。
-- 「データ更新」は RNEConverter を `start_app.py --rne <①-1> --output <①-3> --save-dir <①-2> --table 倉入実績` で呼びます。
-  RNEConverter の RNE 一覧や保存した設定は書き換えません。
+- 「選ぶ…」でフォルダを辿って選べます（`\\サーバー\共有` を直接入力もできます）。「開く」はエクスプローラーで開きます。
+- 入力を変えると、保存する前に右の「状態」が変わります（ある・書ける・既定と違う）。
+- 「データ更新」の取り出し方は RNEConverter と同じです: 拡張 API で取り出し → だめなら画面（DDE）で xls に保存させて読む →
+  さらにだめなら旧 VBA と同じ Excel 経由。進み具合はデータ画面に出て、「中断」で SymNavi ごと止められます。
 - 既定値はツールのフォルダの `config\settings.json`。全 PC に同じ既定を配る時はここを書き換えて配ります。画面で変えた項目だけが PC ごとに残ります。
 
 ## 起動と終了
@@ -84,10 +86,10 @@ Python（標準ライブラリだけ）
 
 | もの | 置き場所 | 書き方 |
 |---|---|---|
-| 倉入実績（取り込み元） | RNEConverter の配布先 `KURAIRE.sqlite3` | 読むだけ。手元に写してから読み取り専用で開く |
+| 倉入実績（取り出したもの） | 作業フォルダに一時的に置き、取り込んだら消す | SymNavi の結果を読んで、そのまま蓄積へ |
 | 蓄積した実績 | 共有 `actuals_history.sqlite3` | ロット番号ごとに蓄積。同じロットは新しい内容に置き換え、消しはしない |
 | 条件表・手動訂正・変更履歴 | 共有 `actuals_master.sqlite3` | 全 PC 共通。版番号・画面が見ていた値と比べ、別の人の保存を上書きしない（409） |
-| 設定・ログ・写し | `%USERPROFILE%\ActualsDashboard`（`ACTUALS_DASHBOARD_HOME` で変更可） | PC ごと |
+| 設定・ログ・写し・SymNavi のログイン | `%USERPROFILE%\ActualsDashboard`（`ACTUALS_DASHBOARD_HOME` で変更可） | PC ごと |
 
 共有の SQLite には複数の PC が直接書きません（SMB 上ではロックが正しく効かないことがあるため）。
 保存のたびに「ロックファイルで 1 台ずつ → 手元で直す → 一時ファイルを置いて os.replace で差し替え」、
@@ -109,7 +111,7 @@ Python（標準ライブラリだけ）
 ## 試験と照合
 
 ```
-python -m unittest discover -s tests -t .              # 70 件（正解データ照合・境界値・同時保存・画面 API・旧ブック読込・パス設定・停止）
+python -m unittest discover -s tests -t .              # 72 件（正解データ照合・境界値・同時保存・画面 API・旧ブック読込・パス設定・データ更新・停止）
 python tools/compare_with_vba.py 旧ツールで集計したブック.xlsm   # 並行運用中の突き合わせ
 python tools/make_golden.py 受領ブック.xlsm tests/fixtures/golden_YYYYMM.json   # 正解データを作る
 ```

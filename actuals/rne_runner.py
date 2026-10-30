@@ -1,90 +1,138 @@
-"""「データ更新」: RNEConverter に倉入実績の抽出を頼む（SymNavi の処理はこのツールに持たない）。
+"""「データ更新」: SymNavi で RNE を実行し、当月の倉入実績を取り出して、そのまま取り込む。
 
-    <python> <RNEConverter>/start_app.py --rne <RNE ファイル> --output <名前> --save-dir <置くフォルダ> --table 倉入実績
+旧 VBA の「データ作成」（SymNavi.exe を起動 → DDE で Open → Save(BIFF) → Close → xls を読む）にあたる。
+SymNavi とのやり取りは RNEConverter のものを写した actuals/symnavi/ をそのまま使う（受け取り方は RNEConverter と同じ:
+拡張 API で取り出し、だめな時は画面（DDE）で保存させた xls を読む。さらにだめなら旧 VBA と同じ Excel 経由）。
 
-RNEConverter が SymNavi でその RNE を実行し、<置くフォルダ>/<名前>.sqlite3 を作る（RNEConverter の RNE 一覧・
-保存した設定は書き換えない）。終わったらこのツールが取り込む。
-終了コード（RNEConverter）: 0 成功 / 1 一部失敗 / 2 設定エラー / 3 別の実行と重なった。
+取り出した表は中間のファイルを作らず、共有の蓄積（actuals_history.sqlite3）にロット番号で取り込む。
 """
 from __future__ import annotations
 
 import collections
 import logging
-import os
-import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional
 
-log = logging.getLogger("actuals.rne")
+log = logging.getLogger("actuals.update")
 
-RC_TEXT = {0: "成功", 1: "失敗（RNEConverter の履歴タブで原因を確認してください）",
-           2: "RNEConverter の設定エラー（SymNavi の ID・パスワードが RNEConverter に登録されているか確認してください）",
-           3: "RNEConverter が別の実行中でした（終わってからもう一度押してください）"}
+TAG = "KURAIRE"
 
 
-class RneRunner:
+class _Lines(logging.Handler):
+    """SymNavi まわりのログを、画面の進み具合の欄にも出す。"""
+
+    def __init__(self, sink: Deque[str]):
+        super().__init__(logging.INFO)
+        self.sink = sink
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.sink.append(f"{time.strftime('%H:%M:%S')} {record.getMessage()}")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class UpdateRunner:
     def __init__(self):
         self._mu = threading.Lock()
-        self.proc: Optional[subprocess.Popen] = None
-        self.lines: Deque[str] = collections.deque(maxlen=200)
+        self.thread: Optional[threading.Thread] = None
+        self.lines: Deque[str] = collections.deque(maxlen=300)
         self.started: Optional[float] = None
         self.finished: Optional[float] = None
-        self.rc: Optional[int] = None
+        self.ok: Optional[bool] = None
+        self.message = ""
+        self.progress = 0.0
+        self.step = ""
         self.after: Dict[str, Any] = {}
+        self.cancelled = False
 
     @property
     def running(self) -> bool:
-        return self.proc is not None and self.rc is None
+        return self.thread is not None and self.ok is None
 
     def status(self) -> Dict[str, Any]:
         now = time.time()
-        return {"running": self.running, "rc": self.rc, "rc_text": RC_TEXT.get(self.rc, "") if self.rc is not None
-                else "", "elapsed": int((self.finished or now) - self.started) if self.started else 0,
-                "lines": list(self.lines)[-30:], "after": self.after}
+        return {"running": self.running, "ok": self.ok, "message": self.message,
+                "rc": None if self.ok is None else (0 if self.ok else 1), "rc_text": self.message,
+                "progress": round(self.progress * 100), "step": self.step,
+                "elapsed": int((self.finished or now) - self.started) if self.started else 0,
+                "lines": list(self.lines)[-40:], "after": self.after}
 
-    def start(self, rne_dir: str, rne_path: str, output: str, save_dir: str, table: str, python_exe: str,
-              on_done: Callable[[int], Dict[str, Any]]) -> None:
+    def start(self, job: Callable[[Callable[[Optional[float], str], None]], Dict[str, Any]]) -> None:
         with self._mu:
             if self.running:
-                raise RuntimeError("すでに実行中です。終わるまでお待ちください。")
-            root = Path(rne_dir)
-            entry = root / "start_app.py"
-            if not rne_dir or not entry.is_file():
-                raise RuntimeError(f"RNEConverter のフォルダが見つかりません: {rne_dir or '（未設定）'}。"
-                                   "設定画面で start_app.py のあるフォルダを指定してください。")
-            exe = python_exe or sys.executable
-            if exe.lower().endswith("pythonw.exe"):
-                cand = Path(exe).with_name("python.exe")
-                exe = str(cand) if cand.exists() else exe
-            args = [exe, str(entry), "--rne", rne_path, "--output", output, "--save-dir", save_dir,
-                    "--key-column", "ﾛｯﾄ番号", "--text-column", "ﾛｯﾄ番号", "--text-column", "検査番号"]
-            if table:
-                args += ["--table", table]
-            flags = 0x08000000 if os.name == "nt" else 0   # CREATE_NO_WINDOW
-            env = dict(os.environ, PYTHONIOENCODING="utf-8")
-            log.info("RNEConverter を呼びます: %s", " ".join(args))
+                raise RuntimeError("データ更新の実行中です。終わるまでお待ちください。")
             self.lines.clear()
-            self.rc, self.finished, self.after = None, None, {}
-            self.started = time.time()
-            self.proc = subprocess.Popen(args, cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                         stdin=subprocess.DEVNULL, creationflags=flags, env=env)
-        threading.Thread(target=self._pump, args=(on_done,), daemon=True).start()
+            self.ok, self.message, self.after, self.progress, self.step = None, "", {}, 0.0, "開始"
+            self.cancelled = False
+            self.started, self.finished = time.time(), None
+            self.thread = threading.Thread(target=self._run, args=(job,), name="data-update", daemon=True)
+            self.thread.start()
 
-    def _pump(self, on_done: Callable[[int], Dict[str, Any]]) -> None:
-        assert self.proc and self.proc.stdout
-        for raw in self.proc.stdout:
-            line = raw.decode("utf-8", "replace").rstrip()
-            if line:
-                self.lines.append(line)
-        rc = self.proc.wait()
-        self.finished = time.time()
-        log.info("RNEConverter が終わりました: rc=%s（%d 秒）", rc, int(self.finished - (self.started or 0)))
+    def _report(self, frac: Optional[float], text: str) -> None:
+        if frac is not None:
+            self.progress = max(0.0, min(1.0, frac))
+        if text and text != self.step:
+            self.step = text
+            self.lines.append(f"{time.strftime('%H:%M:%S')} {text}")
+
+    def _run(self, job) -> None:
+        handler = _Lines(self.lines)
+        logging.getLogger("actuals.symnavi").addHandler(handler)
         try:
-            self.after = on_done(rc) or {}
+            self.after = job(self._report) or {}
+            self.ok = True
+            self.message = "取り込みました"
         except Exception as e:  # noqa: BLE001
-            log.exception("抽出後の取り込みに失敗")
+            log.exception("データ更新に失敗")
             self.after = {"error": str(e)}
-        self.rc = rc
+            self.message = ("中断しました" if self.cancelled else str(e)) or type(e).__name__
+            self.ok = False
+        finally:
+            logging.getLogger("actuals.symnavi").removeHandler(handler)
+            self.finished = time.time()
+
+    def cancel(self) -> bool:
+        if not self.running:
+            return False
+        self.cancelled = True
+        from .symnavi.extract.symnavi import kill_children
+        n = kill_children()
+        log.warning("データ更新を中断しました（終了させた子プロセス: %d）", n)
+        return True
+
+
+def extract_rows(rne_path: Path, work_dir: Path, exe: str, server: str, credentials: Dict[str, str],
+                 startup_wait_sec: int, result_wait_sec: int, cscript_path: str,
+                 report: Callable[[Optional[float], str], None]) -> Dict[str, Any]:
+    """SymNavi で RNE を実行し、(列, 行) を返す。行は列名 → 文字の辞書（Excel の Page1 と同じ値）。"""
+    from .symnavi.config import CscriptConfig, SymNaviConfig
+    from .symnavi.extract.symnavi import SymNaviExtractor, VbsRunner
+    from .symnavi.transform.tsv_reader import read_tsv
+    if not credentials.get("id") or not credentials.get("pass"):
+        raise RuntimeError("SymNavi の ID・パスワードが登録されていません（パスの設定 → SymNavi のログイン）。")
+    work_dir.mkdir(parents=True, exist_ok=True)
+    cfg = SymNaviConfig(exe=exe, server=server, save_dir=str(work_dir), startup_wait_sec=int(startup_wait_sec),
+                        dde_timeout_sec=int(result_wait_sec))
+    ext = SymNaviExtractor(cfg, credentials, VbsRunner(CscriptConfig(path=cscript_path)))
+    try:
+        report(0.01, "SymNavi の準備をしています")
+        try:
+            ext.before_run([(TAG, rne_path)], work_dir)
+        except Exception:  # noqa: BLE001  RNEConverter と同じく、準備の失敗では止めない
+            log.warning("拡張 API の準備でエラー（画面で取り出します）", exc_info=True)
+        tsv = ext.extract(rne_path, TAG, work_dir, progress=report)
+    finally:
+        try:
+            ext.close_session()
+        except Exception:  # noqa: BLE001
+            log.warning("SymNavi を閉じる時にエラー", exc_info=True)
+    columns, raw = read_tsv(tsv)
+    try:
+        tsv.unlink()
+    except OSError:
+        pass
+    rows: List[Dict[str, Any]] = [dict(zip(columns, r)) for r in raw]
+    return {"columns": columns, "rows": rows}

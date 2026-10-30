@@ -1,9 +1,9 @@
 /*
   データ（取り込みと蓄積）
 
-  通常: RNEConverter が出した倉入実績の SQLite を取り込む（新しいものが出ていれば自動）。
-        「データ更新」は RNEConverter に SymNavi の抽出を頼み、終わったら取り込む。
-  予備: SymNavi から出した xls／Excel からコピーした表の貼付け（旧 手作業の手順 UserForm02〜10）。
+  通常: 「データ更新」で SymNavi が RNE を実行し、当月の倉入実績を取り出してそのまま取り込む（旧 データ作成）。
+  予備: SymNavi から出した xls／Excel からコピーした表の貼付け（旧 手作業の手順 UserForm02〜10）／
+        RNEConverter などが作った .sqlite3。
   移行: 旧ブック（.xlsm）の DATA・修正シート（・設定シート）。
   取り込んだ実績はロット番号ごとに蓄積する（同じロットは新しい内容に置き換え、消しはしない）。
 */
@@ -19,27 +19,27 @@ function resultText(r) {
 export async function render(main, ctx, stale) {
   const [h, st] = await Promise.all([api.get("/api/history", "読み込んでいます…"), api.get("/api/state")]);
   if (stale()) return;
-  const src = st.source;
   const rne = st.rne;
-  const kinds = { source: "RNEConverter", paste: "貼付け", xls: "xls", xlsm: "旧ブック" };
+  const kinds = { symnavi: "データ更新（SymNavi）", sqlite: "SQLite", source: "RNEConverter", paste: "貼付け", xls: "xls", xlsm: "旧ブック" };
+  const runState = rne.running ? `<span class="st-dot warn">実行中 ${rne.progress}%（${rne.elapsed} 秒）</span>`
+    : rne.ok === true ? `<span class="st-dot ok">前回は成功（${esc(rne.step)}）</span>`
+    : rne.ok === false ? `<span class="st-dot ng">前回は失敗: ${esc(rne.message)}</span>` : '<span class="muted">まだ実行していません</span>';
   main.innerHTML = `
   <div class="view">
     <div class="view__head"><h2>データ</h2><span class="note">蓄積しているロット ${n0(h.lots)} 件</span></div>
     <div class="month-top">
-      <section class="card"><header><h3>取り込み元（RNEConverter の出力）</h3></header><div class="pad stack">
+      <section class="card"><header><h3>データ更新（SymNavi から取り出す）</h3></header><div class="pad stack">
         <dl class="facts">
-          <dt>ファイル</dt><dd>${esc(src.path)}</dd>
-          <dt>状態</dt><dd>${src.exists ? `<span class="st-dot ${src.pending ? "warn" : "ok"}">${src.pending ? "まだ取り込んでいない新しいデータがあります" : "取り込み済み"}</span>`
-            : `<span class="st-dot ng">${esc(src.error)}</span>`}</dd>
-          ${src.modified ? `<dt>更新日時</dt><dd>${esc(src.modified.replace("T", " "))}</dd>` : ""}
-          <dt>自動の取り込み</dt><dd>${st.auto_import ? "する（新しいデータが出ていたら、画面を開いている間に取り込みます）" : "しない"}</dd>
+          <dt>RNE ファイル</dt><dd>${esc(rne.rne_name || "（未設定。パスの設定 ①で選んでください）")}</dd>
+          <dt>状態</dt><dd>${runState}</dd>
+          ${rne.running ? `<dt>いま</dt><dd>${esc(rne.step)}</dd>` : ""}
         </dl>
         <div class="btn-row">
-          <button class="btn btn--run" type="button" id="imp" ${src.exists ? "" : "disabled"}>いま取り込む</button>
-          <button class="btn" type="button" id="rerun" ${rne.running ? "disabled" : ""}>データ更新（RNEConverter で抽出）</button>
+          <button class="btn btn--run" type="button" id="rerun" ${rne.running ? "disabled" : ""}>データ更新</button>
+          ${rne.running ? '<button class="btn btn--danger" type="button" id="cancelRun">中断</button>' : ""}
         </div>
+        <p class="note">SymNavi が起動し、RNE を実行して当月の倉入実績を取り出します。終わると共有の蓄積に取り込みます（ほかの PC にもすぐ反映）。</p>
         ${rne.lines && rne.lines.length ? `<div class="loglines">${esc(rne.lines.join("\n"))}</div>` : ""}
-        ${rne.rc !== null && rne.rc !== undefined ? `<p class="note">前回のデータ更新: ${esc(rne.rc_text)}（${rne.elapsed} 秒）</p>` : ""}
       </div></section>
       <section class="card"><header><h3>月ごとの件数（集計日）</h3></header><div class="pad pad--flush">
         <div class="tablewrap tablewrap--mid"><table class="table table--dense">
@@ -53,11 +53,14 @@ export async function render(main, ctx, stale) {
         <td class="n">${n0(i.rows)}</td><td class="n">${n0(i.added)}</td><td class="n">${n0(i.changed)}</td><td class="n">${n0(i.same)}</td>
         <td>${esc((i.months || "").split(",").join(" "))}</td><td>${esc(i.by_pc)} ${esc(i.by_user)}</td></tr>`).join("")
         || '<tr><td colspan="9">まだありません</td></tr>'}</tbody></table></div></div></section>
-    <section class="card"><header><h3>RNEConverter が使えない時（手作業の取り込み）</h3></header><div class="pad stack">
+    <section class="card"><header><h3>データ更新が使えない時（手作業の取り込み）</h3></header><div class="pad stack">
       <p class="note">SymNavi で RNE を開いて保存した xls を選ぶか、SymNavi の結果を Excel に出して表全体（見出しの行ごと）をコピーし、下に貼り付けてください。</p>
       <div class="btn-row"><input type="file" id="xlsFile" accept=".xls,.XLS"><button class="btn btn--run" type="button" id="xlsGo">xls を取り込む</button></div>
       <textarea class="input" id="paste" placeholder="ここに貼り付け（ﾛｯﾄ番号 … BOX実績_作業終了_日付 の見出しを含めて）"></textarea>
       <div class="btn-row"><button class="btn btn--run" type="button" id="pasteGo">貼り付けた表を取り込む</button></div>
+      <p class="note">RNEConverter などで作った倉入実績の .sqlite3 がある時は、その場所を入れて取り込めます。</p>
+      <div class="btn-row"><input class="input input--wide" id="sqlPath" placeholder="例: \\\\サーバー\\共有\\KURAIRE.sqlite3">
+        <button class="btn btn--run" type="button" id="sqlGo">.sqlite3 を取り込む</button></div>
     </div></section>
     <section class="card"><header><h3>旧ブックからの移行</h3></header><div class="pad stack">
       <p class="note">旧ツール（.xlsm）の DATA シートの実績と、修正シート A 列の手動訂正（同じ行のロット番号に結び付けて）を取り込みます。
@@ -69,9 +72,16 @@ export async function render(main, ctx, stale) {
   </div>`;
 
   const after = async (r) => { toast(resultText(r), "ok"); await ctx.reloadState(); ctx.refresh(); };
-  $("#imp").addEventListener("click", async () => {
-    try { const r = await api.post("/api/import/source", { force: true }, "取り込んでいます…"); r.skipped ? toast(r.message, "info") : await after(r); }
-    catch (e) { toastError(e); }
+  const cancel = document.getElementById("cancelRun");
+  if (cancel) cancel.addEventListener("click", async () => {
+    if (!(await confirmBox("データ更新を中断します（SymNavi を閉じます）。", { ok: "中断", danger: true }))) return;
+    try { await api.post("/api/rne/cancel", {}); toast("中断しました。", "warn"); ctx.refresh(); } catch (e) { toastError(e); }
+  });
+  if (rne.running) setTimeout(() => { if (location.hash === "#data") ctx.refresh(); }, 2000);
+  $("#sqlGo").addEventListener("click", async () => {
+    const path = $("#sqlPath").value.trim();
+    if (!path) { toast("ファイルの場所を入れてください。", "warn"); return; }
+    try { await after(await api.post("/api/import/sqlite", { path }, "取り込んでいます…")); } catch (e) { toastError(e); }
   });
   $("#rerun").addEventListener("click", () => document.getElementById("rneRun").click());
   $("#xlsGo").addEventListener("click", async () => {

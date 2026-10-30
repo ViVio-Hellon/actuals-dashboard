@@ -26,7 +26,7 @@ class WebTest(unittest.TestCase):
         cls.g = g
         cls.src = write_source(cls.tmp / "KURAIRE.sqlite3", g["header"], g["rows"])
         (cls.paths.config / "settings.json").write_text(json.dumps({
-            "shared_dir": str(cls.tmp / "share"), "rne_output_dir": str(cls.tmp), "rne_output": "KURAIRE",
+            "shared_dir": str(cls.tmp / "share"),
             "export_dir": str(cls.tmp / "export")}), encoding="utf-8")
         from actuals.web import server
         cls.holder = {}
@@ -67,17 +67,17 @@ class WebTest(unittest.TestCase):
         self.assertEqual(code, 403)
         self.assertEqual(body["error"]["code"], "token")
 
-    def test_02_auto_import_and_month(self):
+    def test_02_import_and_month(self):
         code, st = self.call("/api/state")
         self.assertEqual(code, 200)
-        self.assertTrue(st["source"]["pending"])
-        code, res = self.call("/api/import/auto", {})
+        self.assertEqual(st["history"]["lots"], 0)
+        code, res = self.call("/api/import/sqlite", {"path": str(self.src)})
         self.assertEqual((code, res["rows"], res["added"]), (200, 987, 987))
         code, st = self.call("/api/state")
-        self.assertFalse(st["source"]["pending"])
         self.assertEqual((st["default"]["year"], st["default"]["month"]), (2022, 6))   # 旧 VBA の集計月と同じ
-        code, again = self.call("/api/import/auto", {})
-        self.assertTrue(again.get("skipped"))                                          # 二度は取り込まない
+        code, again = self.call("/api/import/sqlite", {"path": str(self.src)})
+        self.assertEqual((again["added"], again["same"]), (0, 987))                    # 同じロットは増えない
+        self.assertEqual(self.call("/api/import/sqlite", {"path": str(self.tmp / "none.sqlite3")})[0], 422)
 
     def test_03_vba_compatible_matches_golden(self):
         """判定方式を旧 VBA と同じにすると、月集計が受領ブックと一致する（手動訂正も移す）。"""
@@ -169,18 +169,28 @@ class WebTest(unittest.TestCase):
         code, s = self.call("/api/settings")
         self.assertEqual(self.call("/api/settings", {"values": {"auto_import": True}, "revision": s["revision"]})[0], 200)
 
-    def test_09_rne_not_configured(self):
+    def test_09_update_not_configured(self):
         code, body = self.call("/api/rne/run", {})
         self.assertEqual(code, 422)
-        self.assertIn("RNE ファイルが見つかりません", body["error"]["message"])
+        msg = body["error"]["message"]
+        self.assertIn("RNE ファイルが見つかりません", msg)
+        self.assertIn("ID・パスワードが未登録", msg)
 
-    def test_10_bad_output_name(self):
+    def test_10_credentials_never_returned(self):
+        self.assertEqual(self.call("/api/credentials", {"id": "", "password": "x"})[0], 422)
+        code, r = self.call("/api/credentials", {"id": "user1", "password": "secret-pass"})
+        self.assertEqual((code, r["id"], r["has_password"], r["ready"]), (200, "user1", True, True))
         code, s = self.call("/api/settings")
-        code, body = self.call("/api/settings", {"values": {"rne_output": "A/B"}, "revision": s["revision"]})
+        self.assertNotIn("secret-pass", json.dumps(s, ensure_ascii=False))
+        code, st = self.call("/api/state")
+        self.assertNotIn("secret-pass", json.dumps(st, ensure_ascii=False))
+        code, r = self.call("/api/credentials", {"id": "user2", "password": ""})        # 空ならパスワードはそのまま
+        self.assertTrue(r["has_password"])
+
+    def test_11_bad_seconds(self):
+        code, s = self.call("/api/settings")
+        code, body = self.call("/api/settings", {"values": {"result_wait_sec": "abc"}, "revision": s["revision"]})
         self.assertEqual(code, 422)
-        code, s = self.call("/api/settings")
-        self.assertEqual(s["resolved"]["source_path"], str(self.tmp / "KURAIRE.sqlite3"))   # 置くフォルダ + 名前
-
 
 if __name__ == "__main__":
     unittest.main()

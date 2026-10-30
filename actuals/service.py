@@ -16,7 +16,8 @@ from .conditions import (FIELDS, GROUP_COUNT, RULE_NOT_HIT, RULE_NOT_MATERIAL, C
                          blank_warnings, parse_cell, validate)
 from .engine import CALENDARS, GENBA, TAIYO, classify, compute_lot
 from .export import open_folder, write_csv
-from .rne_runner import RneRunner
+from . import credentials
+from .rne_runner import UpdateRunner
 from .settings import Paths, Settings, app_info
 from .sharedfile import SharedBusy, SharedUnreachable, who
 from .stores import Conflict, HistoryStore, ImportError_, MasterStore
@@ -50,7 +51,7 @@ class Service:
     def __init__(self, paths: Paths):
         self.paths = paths
         self.settings = Settings(paths)
-        self.rne = RneRunner()
+        self.rne = UpdateRunner()
         self._cache: "OrderedDict[tuple, List[A.Row]]" = OrderedDict()
         self._import_mu = threading.Lock()
         self._stores_key: Optional[tuple] = None
@@ -109,28 +110,6 @@ class Service:
         t = date.today()
         return t.year, t.month
 
-    def source_status(self) -> Dict[str, Any]:
-        s = self.conf()
-        out: Dict[str, Any] = {"path": s["source_path"], "exists": False, "pending": False, "error": ""}
-        if not s["source_path"]:
-            out["error"] = "設定画面の「パスの設定 ①」で、作ったファイルを置くフォルダと名前を指定してください"
-            return out
-        try:
-            fp = S.probe(Path(s["source_path"]))
-        except SharedUnreachable as e:
-            out["error"] = str(e)
-            return out
-        if fp is None:
-            out["error"] = ("まだありません（「データ更新」を押すと RNEConverter が作ります）" if s["source_path"]
-                            else "設定画面の「パスの設定 ①」で、作ったファイルを置くフォルダと名前を指定してください")
-            return out
-        out["exists"] = True
-        out["modified"] = datetime.fromtimestamp(fp[1] / 1e9).isoformat(timespec="seconds")
-        out["fp_raw"] = f"{fp[0]}-{fp[1]}"
-        # 最後に取り込んだ時の（大きさ・更新時刻）と違えば新しい。PC と共有の時計のずれに左右されない
-        out["pending"] = self.history.last_source_fingerprint(s["source_path"]) != out["fp_raw"]
-        return out
-
     def state(self) -> Dict[str, Any]:
         s = self.conf()
         info = app_info()
@@ -141,15 +120,14 @@ class Service:
                   "stale": self.master.file.stale or self.history.file.stale,
                   "error": self.master.file.last_error or self.history.file.last_error}
         return {"app": {"name": info.get("display_name"), "version": info.get("version"), **who()},
-                "shared": shared, "source": self.source_status(), "auto_import": bool(s.get("auto_import", True)),
+                "shared": shared,
                 "history": {"lots": summary["lots"], "months": summary["months"], "last": summary["last"]},
                 "default": {"year": y, "month": m, "fy": fiscal_year_of(y, m)},
                 "conditions": {"rev": cs.rev, "updated_at": cs.updated_at, "updated_by": cs.updated_by,
                                "rules": [RULE_NOT_MATERIAL[cs.rule_not_material], RULE_NOT_HIT[cs.rule_not_hit]]},
                 "overrides": len(self.master.overrides()),
-                "rne": {**self.rne.status(), "configured": bool(s.get("rneconverter_dir") and s.get("rne_path")),
-                        "output": s.get("rne_output"), "rne_name": Path(s.get("rne_path") or "").name,
-                        "source": s.get("source_path")},
+                "rne": {**self.rne.status(), "configured": bool(s.get("rne_path")) and credentials.status(self.paths)["ready"],
+                        "rne_name": Path(s.get("rne_path") or "").name},
                 "calendars": CALENDARS}
 
     # ---------- 月の集計（旧 月集計 + ｸﾞﾗﾌ） ----------
@@ -333,20 +311,18 @@ class Service:
         return self.conditions()
 
     # ---------- 取り込み ----------
-    def import_source(self, force: bool = False) -> Dict[str, Any]:
-        s = self.conf()
+    def import_sqlite(self, path: str) -> Dict[str, Any]:
+        """RNEConverter などが作った SQLite（.sqlite3）から取り込む（予備）。"""
+        p = Path((path or "").strip().strip('"'))
+        if not p.is_file():
+            raise UserError(f"ファイルがありません: {p}")
+        src = S.read_sqlite(p, self.paths.cache / "source")
         with self._import_mu:
-            st = self.source_status()
-            if not st["exists"]:
-                raise UserError(f"取り込み元がありません: {s['source_path']}（{st['error']}）")
-            if not force and not st["pending"]:
-                return {"skipped": True, "message": "新しいデータはありません（取り込み済み）。"}
-            src = S.read_sqlite(Path(s["source_path"]), self.paths.cache / "source", s.get("source_table") or "")
-            res = self.history.merge(src["columns"], src["rows"], kind="source", source=s["source_path"],
+            res = self.history.merge(src["columns"], src["rows"], kind="sqlite", source=str(p),
                                      fingerprint=src["fingerprint"], generated_at=src["meta"].get("generated_at", ""),
                                      run_id=src["meta"].get("run_id", ""))
         self._cache.clear()
-        log.info("取り込みました（%s）: %s", s["source_path"], res)
+        log.info("取り込みました（%s）: %s", p, res)
         return res
 
     def import_rows(self, columns: List[str], rows: List[Dict[str, Any]], kind: str, source: str) -> Dict[str, Any]:
@@ -384,48 +360,43 @@ class Service:
         self._cache.clear()
         return res
 
-    def maybe_auto_import(self) -> Optional[Dict[str, Any]]:
-        s = self.conf()
-        if not s.get("auto_import", True) or self._import_mu.locked():
-            return None
-        st = self.source_status()
-        if st["exists"] and st["pending"]:
-            try:
-                return self.import_source()
-            except (UserError, S.SourceError, ImportError_, SharedBusy, SharedUnreachable) as e:
-                log.warning("自動の取り込みをやめました: %s", e)
-                return {"error": str(e)}
-        return None
-
     def history_summary(self) -> Dict[str, Any]:
         return self.history.summary()
 
-    # ---------- データ更新（RNEConverter） ----------
-    def run_rne(self) -> Dict[str, Any]:
+    # ---------- データ更新（SymNavi） ----------
+    def run_update(self) -> Dict[str, Any]:
+        """SymNavi で RNE を実行して当月の倉入実績を取り出し、共有の蓄積に取り込む（旧 VBA のデータ作成）。"""
         s = self.conf()
-
-        def done(rc: int) -> Dict[str, Any]:
-            if rc in (0, 1):
-                try:
-                    return self.import_source(force=False)
-                except Exception as e:  # noqa: BLE001
-                    return {"error": str(e)}
-            return {}
+        cred, _ = credentials.load(self.paths)
         problems = []
-        if not s.get("rne_path") or not Path(s["rne_path"]).is_file():
+        rne = Path(s.get("rne_path") or "")
+        if not s.get("rne_path") or not rne.is_file():
             problems.append(f"RNE ファイルが見つかりません: {s.get('rne_path') or '（未設定）'}")
-        if not s.get("rne_output_dir"):
-            problems.append("作ったファイルを置くフォルダが未設定です")
-        if not s.get("rne_output"):
-            problems.append("作るファイルの名前が未設定です")
+        if not s.get("symnavi_exe") or not Path(s["symnavi_exe"]).is_file():
+            problems.append(f"SymNavi.exe が見つかりません: {s.get('symnavi_exe') or '（未設定）'}")
+        if not (cred["id"] and cred["pass"]):
+            problems.append("SymNavi の ID・パスワードが未登録です")
         if problems:
-            raise UserError("データ更新できません。設定画面の「パスの設定 ①」を確認してください: " + "／".join(problems))
+            raise UserError("データ更新できません。「パスの設定」を確認してください: " + "／".join(problems))
+        work = Path(s.get("work_dir") or (self.paths.base / "work"))
+
+        def job(report):
+            from .rne_runner import extract_rows
+            got = extract_rows(rne, work, s["symnavi_exe"], s.get("symnavi_server") or "NlmFaNgyNavd", cred,
+                               int(s.get("startup_wait_sec") or 20), int(s.get("result_wait_sec") or 120),
+                               s.get("cscript_path") or "", report)
+            report(0.95, f"取り込んでいます（{len(got['rows']):,} 行）")
+            res = self.import_rows(got["columns"], got["rows"], "symnavi", rne.name)
+            report(1.0, f"{res['rows']:,} 件を取り込みました（追加 {res['added']}・更新 {res['changed']}）")
+            return res
         try:
-            self.rne.start(s.get("rneconverter_dir", ""), s["rne_path"], s["rne_output"], s["rne_output_dir"],
-                           s.get("source_table") or "", s.get("python_exe", ""), done)
+            self.rne.start(job)
         except RuntimeError as e:
             raise UserError(str(e))
         return self.rne.status()
+
+    def cancel_update(self) -> Dict[str, Any]:
+        return {"cancelled": self.rne.cancel()}
 
     # ---------- 書き出し ----------
     def export(self, kind: str, y: int, m: int, cal: str, sel: Any, fy: int) -> Dict[str, Any]:

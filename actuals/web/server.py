@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlparse
 
-from .. import logsetup, paths_check
+from .. import credentials, logsetup, paths_check
 from ..aggregate import ALL
 from ..service import Service, UserError
 from ..settings import APP_ID, EDITABLE, GROUPS, Paths, SettingsError, SettingsInputError, app_info
@@ -162,6 +162,8 @@ class WebApp:
 
         def _stop():
             time.sleep(0.3)
+            if self.service.rne.running:
+                self.service.rne.cancel()   # SymNavi・Excel を残さない
             if self.httpd:
                 self.httpd.shutdown()
         threading.Thread(target=_stop, daemon=True).start()
@@ -333,6 +335,7 @@ def make_handler(app: WebApp):
                 return self._json(200, paths_check.list_dir((q.get("path") or [""])[0], exts))
             if path == "/api/settings":
                 return self._json(200, {"values": svc.settings.load(), "resolved": svc.conf(),
+                                        "credentials": credentials.status(app.paths),
                                         "revision": svc.settings.revision(),
                                         "fields": [{"key": k, "group": g, "label": lb, "note": n, "kind": kd}
                                                    for k, g, lb, n, kd in EDITABLE],
@@ -362,16 +365,22 @@ def make_handler(app: WebApp):
             self._handle(lambda: self._post(u.path, self._body()))
 
         def _post(self, path: str, d: Dict[str, Any]) -> None:
-            if path == "/api/import/source":
-                return self._json(200, svc.import_source(force=bool(d.get("force"))))
-            if path == "/api/import/auto":
-                return self._json(200, svc.maybe_auto_import() or {"skipped": True})
+            if path == "/api/import/sqlite":
+                return self._json(200, svc.import_sqlite(str(d.get("path") or "")))
             if path == "/api/import/paste":
                 return self._json(200, svc.import_paste(str(d.get("text") or "")))
             if path == "/api/import/workbook":
                 return self._json(200, svc.import_workbook(str(d.get("path") or ""), bool(d.get("with_conditions"))))
             if path == "/api/rne/run":
-                return self._json(202, svc.run_rne())
+                return self._json(202, svc.run_update())
+            if path == "/api/rne/cancel":
+                return self._json(200, svc.cancel_update())
+            if path == "/api/credentials":
+                try:
+                    return self._json(200, credentials.save(app.paths, str(d.get("id") or ""),
+                                                            str(d.get("password") or "")))
+                except ValueError as e:
+                    raise UserError(str(e))
             if path == "/api/override":
                 grp = d.get("grp")
                 seen = d.get("seen")

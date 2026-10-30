@@ -2,7 +2,7 @@
 
 - list_dir  … 「選ぶ…」のフォルダ一覧（ブラウザはフルパスを渡せないので、サーバが中を見せる。RNEConverter と同じ作り）
 - check     … 保存する前に、入れたパスで使えるかを確かめる（ある・書ける・中身が合っている）
-- rneconverter_status … RNEConverter の RNE 一覧の KURAIRE（有効か・RNE ファイルがあるか・出力先が取り込み元と同じか）
+- 「データ更新」に要るもの（RNE ファイル・SymNavi.exe・サーバー名・ログイン・作業フォルダ）
 - open_path … エクスプローラーで開く（Windows のみ）
 
 共有フォルダが応答しなくても画面を止めないよう、ファイルに触る所はすべて時間を区切る。
@@ -157,91 +157,47 @@ def check_rne(value: str, paths: Paths) -> Dict[str, Any]:
     return _item("ok", f"あります（{_mtime(p)} 更新）。")
 
 
-def check_source(path_text: str) -> Dict[str, Any]:
-    """取り込むファイル（置くフォルダ + 名前 から決まる）。まだ無いのは、データ更新の前なら普通。"""
-    if not path_text:
-        return _item("missing", "「作ったファイルを置くフォルダ」と「作るファイルの名前」を入れると決まります。")
-    p = Path(path_text)
+def check_exe(value: str, paths: Paths, missing_state: str = "missing", what: str = "") -> Dict[str, Any]:
+    if not value.strip():
+        return _item(missing_state, "未設定です。")
+    p = Path(expand(value, paths))
     ex = _try(lambda: p.is_file(), False)
     if ex == "timeout":
-        return _item("timeout", f"応答がありません（{NET_TIMEOUT:.0f} 秒）。")
-    if not ex:
-        return _item("warn", "まだありません。「データ更新」を押すと RNEConverter が作ります。")
-
-    def head():
-        with open(p, "rb") as f:
-            return f.read(16)
-    if _try(head, b"") != b"SQLite format 3\x00":
-        return _item("missing", "同じ名前のファイルがありますが、SQLite ではありません。名前を変えてください。")
-    return _item("ok", f"あります（{_mtime(p)} 更新）。このファイルから取り込みます。")
+        return _item("timeout", "応答がありません。")
+    if ex is not True:
+        return _item(missing_state, f"ありません。{what}")
+    return _item("ok", "あります。")
 
 
-def check_python(value: str) -> Dict[str, Any]:
+def check_work(value: str, paths: Paths) -> Dict[str, Any]:
     if not value.strip():
-        return _item("ok", f"このツールと同じ Python を使います: {sys.executable}")
-    p = Path(value.strip().strip('"'))
-    return _item("ok", "あります。") if _try(lambda: p.is_file(), False) is True else _item("missing", "ファイルがありません。")
-
-
-def _read_json(p: Path) -> Any:
-    try:
-        return json.loads(p.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
-        return None
-
-
-def rneconverter_status(rne_dir_text: str, paths: Paths) -> Dict[str, Any]:
-    """RNEConverter が「データ更新」に使えるか（RNEConverter の設定は読むだけで書き換えない）。"""
-    if not rne_dir_text.strip():
-        return _item("missing", "未設定です。RNEConverter のフォルダ（start_app.py があるフォルダ）を選んでください。"
-                                "未設定でも、ほかの PC が作ったファイルの取り込みはできます。", rows=[])
-    root = Path(expand(rne_dir_text, paths))
-    if _try(lambda: (root / "start_app.py").is_file(), False) is not True:
-        return _item("missing", "このフォルダに start_app.py がありません（RNEConverter のフォルダを選んでください）。",
-                     rows=[])
-    rows: List[Dict[str, Any]] = []
-    main_py = _try(lambda: (root / "app" / "main.py").read_text(encoding="utf-8"), "") or ""
-    new_enough = '"--rne"' in main_py
-    rows.append({"label": "RNEConverter の版", "state": "ok" if new_enough else "missing",
-                 "value": "RNE ファイルと置き場所を指定して実行できる版" if new_enough
-                 else "古い版です（RNE ファイルと置き場所を渡せません）",
-                 "note": "" if new_enough else "RNEConverter を新しい版（claude/exciting-wright-gi2v64 以降）に入れ替えてください。"})
-    env = os.environ.get("RNE_CONVERTER_HOME")
-    data = Path(env) if env else Path(os.environ.get("USERPROFILE") or Path.home()) / "RNEConverter"
-    cred = _read_json(data / "config" / "credentials.json") or {}
-    has_cred = bool(cred.get("id") and cred.get("pass")) or bool(os.environ.get("RNE_SYMNAVI_ID"))
-    rows.append({"label": "SymNavi のログイン", "state": "ok" if has_cred else "missing",
-                 "value": "この PC の RNEConverter に登録済み" if has_cred else "この PC の RNEConverter に未登録",
-                 "note": "" if has_cred else "RNEConverter を起動し、設定タブ →「認証」で ID とパスワードを登録してください。"})
-    bad = [r for r in rows if r["state"] != "ok"]
-    return _item("ok" if not bad else "missing", "使えます。" if not bad else "下の項目を確認してください。", rows=rows)
+        return _item("missing", "未設定です。")
+    d = Path(expand(value, paths))
+    local = os.environ.get("LOCALAPPDATA", "")
+    if local and str(d).lower().startswith(local.lower()):
+        return _item("missing", "%LOCALAPPDATA% の中は使えません（SymNavi から見えないことがある）。別の場所にしてください。")
+    return _writable(d, create=True)
 
 
 def check_all(values: Dict[str, Any], paths: Paths) -> Dict[str, Any]:
-    from .settings import source_file
-    v = {k: str(values.get(k) or "") for k in ("shared_dir", "rne_path", "rne_output_dir", "rne_output",
-                                               "rneconverter_dir", "python_exe", "export_dir", "log_dir")}
-    name = v["rne_output"].strip()
-    if name.lower().endswith(".sqlite3"):
-        name = name[:-8]
-    out_dir = expand(v["rne_output_dir"], paths) if v["rne_output_dir"].strip() else ""
-    src = source_file(out_dir, name)
-    if not name:
-        name_state = _item("missing", "未設定です。")
-    elif any(ch in name for ch in '\\/:*?"<>|'):
-        name_state = _item("missing", "使えない文字があります（\\ / : * ? \" < > |）。")
-    else:
-        name_state = _item("ok", f"「{name}.sqlite3」を作ります。")
+    from . import credentials
+    v = {k: str(values.get(k) if values.get(k) is not None else "") for k in (
+        "shared_dir", "rne_path", "symnavi_exe", "symnavi_server", "export_dir", "log_dir", "work_dir", "cscript_path")}
+    cred = credentials.status(paths)
     return {
         "rne_path": check_rne(v["rne_path"], paths),
-        "rne_output_dir": _writable(Path(out_dir), create=False) if out_dir else _item("missing", "未設定です。"),
-        "rne_output": name_state,
-        "rneconverter_dir": rneconverter_status(v["rneconverter_dir"], paths),
-        "source": {**check_source(src), "path": src},
+        "symnavi_exe": check_exe(v["symnavi_exe"], paths, what="SymNavi が入っている PC で使ってください（旧ツールと同じ C:\\NAVICL\\bin\\SymNavi.exe）。"),
+        "symnavi_server": _item("ok", "旧ツールと同じです。") if v["symnavi_server"].strip() == "NlmFaNgyNavd"
+        else (_item("warn", "旧ツール（NlmFaNgyNavd）と違います。") if v["symnavi_server"].strip() else _item("missing", "未設定です。")),
+        "credentials": (_item("ok", f"登録済み（ID {cred['id']}・{cred['source']}）。") if cred["ready"]
+                        else _item("missing", "未登録です。下の「SymNavi のログイン」で ID とパスワードを登録してください。")),
         "shared_dir": check_shared(v["shared_dir"], paths),
-        "python_exe": check_python(v["python_exe"]),
         "export_dir": _writable(Path(expand(v["export_dir"], paths)), create=True) if v["export_dir"]
         else _item("missing", "未設定です。"),
         "log_dir": _writable(Path(expand(v["log_dir"], paths)), create=True) if v["log_dir"]
         else _item("missing", "未設定です。"),
+        "work_dir": check_work(v["work_dir"], paths),
+        "cscript_path": check_exe(v["cscript_path"], paths, missing_state="warn",
+                                  what="Excel 経由の予備の取り出しだけで使うので、ふつうは無くても動きます。"),
+        "startup_wait_sec": _item("ok", ""), "result_wait_sec": _item("ok", ""),
     }

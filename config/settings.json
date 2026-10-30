@@ -1,14 +1,14 @@
 {
   "rne_path": "",
-  "rne_output_dir": "\\\\nlmsrvngy03\\Read\\【New】仕掛\\台帳",
-  "rne_output": "KURAIRE",
-  "rneconverter_dir": "",
+  "symnavi_exe": "C:\\NAVICL\\bin\\SymNavi.exe",
+  "symnavi_server": "NlmFaNgyNavd",
   "shared_dir": "",
   "export_dir": "{DATA}/export",
   "log_dir": "{DATA}/logs",
-  "python_exe": "",
-  "source_table": "倉入実績",
-  "auto_import": true,
+  "work_dir": "{DATA}/work",
+  "startup_wait_sec": 20,
+  "result_wait_sec": 120,
+  "cscript_path": "C:\\Windows\\System32\\cscript.exe",
   "lock_wait_sec": 10,
   "log_keep_days": 90
 }

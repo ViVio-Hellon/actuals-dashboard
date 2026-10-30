@@ -62,10 +62,10 @@ class Paths:
         return self.base / "export"
 
 
-# 画面から変えられる項目（キー、段、見出し、何に使うか、種類）。種類: dir / file:<拡張子> / text / bool
+# 画面から変えられる項目（キー、段、見出し、何に使うか、種類）。種類: dir / file:<拡張子> / text / number / bool
 # 段は、データの流れの順: ① SymNavi から取り出す → ② 取り込んで集計する → ③ 書き出す・記録する
 GROUPS: Dict[str, str] = {
-    "extract": "① データ更新（SymNavi から当月の倉入実績を取り出す）",
+    "extract": "① データ更新（SymNavi で RNE を実行して、当月の倉入実績を取り出す）",
     "store": "② 集計データの置き場所",
     "output": "③ 書き出しと記録",
     "advanced": "詳しい設定（ふつうは変えない）",
@@ -73,36 +73,26 @@ GROUPS: Dict[str, str] = {
 EDITABLE: List[Tuple[str, str, str, str, str]] = [
     ("rne_path", "extract", "RNE ファイル",
      "SymNavi に渡す問い合わせのファイル。旧ブックと同じフォルダにあった「梱包実績(当月_倉入れ日付順).RNE」を選ぶ。"
-     "「データ更新」を押すと、この RNE で当月の倉入実績を取り出す。", "file:.rne"),
-    ("rne_output_dir", "extract", "作ったファイルを置くフォルダ",
-     "RNEConverter が取り出した倉入実績を SQLite のファイルにして置く場所。このツールはここから取り込む。"
-     "共有フォルダにすると、どの PC で「データ更新」しても全員が取り込める。", "dir"),
-    ("rne_output", "extract", "作るファイルの名前",
-     "拡張子は付けない。KURAIRE なら「KURAIRE.sqlite3」ができる。", "text"),
-    ("rneconverter_dir", "extract", "RNEConverter のフォルダ",
-     "SymNavi を動かして RNE を実行するツールの場所（start_app.py があるフォルダ）。"
-     "SymNavi の ID・パスワードは RNEConverter の設定画面で登録する。", "dir"),
+     "「データ更新」を押すと、この RNE で当月の倉入実績を取り出し、そのまま取り込む。", "file:.rne"),
+    ("symnavi_exe", "extract", "SymNavi.exe",
+     "SymNavi 本体の場所。旧ツールと同じ C:\\NAVICL\\bin\\SymNavi.exe が既定。", "file:.exe"),
+    ("symnavi_server", "extract", "SymNavi のサーバー名", "旧ツールと同じ NlmFaNgyNavd が既定。", "text"),
     ("shared_dir", "store", "共有フォルダ",
      "取り込んだ倉入実績（月ごとに蓄積）・グループの条件表・手動訂正を置く。全 PC で同じ場所にすると、"
-     "全員が同じ集計を見る。空欄ならこの PC の中だけに保存（試用）。", "dir"),
+     "全員が同じ集計を見る（どの PC で「データ更新」しても全員に反映）。空欄ならこの PC の中だけに保存（試用）。", "dir"),
     ("export_dir", "output", "CSV の書き出し先",
      "月の集計・明細・年の集計の「CSV に」ボタンで書くフォルダ。", "dir"),
     ("log_dir", "output", "ログの保存先",
      "動きの記録。困った時に原因を追うために使う。共有フォルダにすると全 PC の分を 1 か所で見られる。", "dir"),
-    ("python_exe", "advanced", "Python",
-     "RNEConverter を動かす python.exe。空欄ならこのツールと同じ Python。", "file:.exe"),
-    ("source_table", "advanced", "作るファイルの中の表の名前", "既定は「倉入実績」。", "text"),
-    ("auto_import", "advanced", "新しいファイルができていたら自動で取り込む",
-     "別の PC が「データ更新」した時も、画面を開いていれば取り込む。", "bool"),
+    ("work_dir", "advanced", "作業フォルダ",
+     "SymNavi に結果を一時的に保存させる場所（取り込んだら消す）。%LOCALAPPDATA% の中は不可"
+     "（Microsoft Store 版の Python だと SymNavi から見えない）。", "dir"),
+    ("startup_wait_sec", "advanced", "SymNavi の起動を待つ秒数", "既定 20 秒。", "number"),
+    ("result_wait_sec", "advanced", "SymNavi の結果を待つ秒数", "既定 120 秒。時間のかかる時だけ増やす。", "number"),
+    ("cscript_path", "advanced", "cscript.exe",
+     "Excel 経由の予備の取り出しで使う。ACE が 32bit の時は C:\\Windows\\SysWOW64\\cscript.exe。", "file:.exe"),
 ]
 PATH_KEYS = [k for k, _, _, _, kind in EDITABLE if kind == "dir" or kind.startswith("file")]
-
-
-def source_file(output_dir: str, name: str) -> str:
-    """取り込むファイル = 作ったファイルを置くフォルダ + 作るファイルの名前 + .sqlite3。"""
-    if not output_dir or not name:
-        return ""
-    return str(Path(output_dir) / f"{name}.sqlite3")
 
 
 class SettingsError(ValueError):
@@ -151,10 +141,8 @@ class Settings:
     def resolved(self) -> Dict[str, Any]:
         s = self.load()
         out = copy.deepcopy(s)
-        for k in ("shared_dir", "rne_path", "rne_output_dir", "rneconverter_dir", "export_dir", "log_dir", "python_exe"):
+        for k in ("shared_dir", "rne_path", "symnavi_exe", "export_dir", "log_dir", "work_dir", "cscript_path"):
             out[k] = expand(s.get(k, ""), self.paths)
-        out["rne_output"] = str(s.get("rne_output") or "").strip()
-        out["source_path"] = source_file(out["rne_output_dir"], out["rne_output"])
         out["shared_configured"] = bool(out["shared_dir"])
         if not out["shared_dir"]:
             out["shared_dir"] = str(self.paths.base / "shared")
@@ -170,14 +158,15 @@ class Settings:
         for k, v in changes.items():
             if k not in allowed:
                 continue
-            if k == "auto_import":
-                v = bool(v)
+            if k in ("startup_wait_sec", "result_wait_sec"):
+                try:
+                    v = int(str(v).strip())
+                except ValueError:
+                    raise SettingsInputError("秒数は数字で入れてください。")
+                if not 1 <= v <= 3600:
+                    raise SettingsInputError("秒数は 1〜3600 で入れてください。")
             else:
                 v = str(v or "").strip().strip('"')
-                if k == "rne_output":
-                    v = v[:-8] if v.lower().endswith(".sqlite3") else v
-                    if any(ch in v for ch in '\\/:*?"<>|'):
-                        raise SettingsInputError("作るファイルの名前に使えない文字があります（\\ / : * ? \" < > |）。")
             before = cur.get(k, defaults.get(k))
             if v == defaults.get(k):
                 cur.pop(k, None)
