@@ -67,6 +67,23 @@ class PathsCheck(unittest.TestCase):
         self.assertEqual(res["credentials"]["state"], "missing")
         self.assertEqual(P.check_all({"symnavi_server": "X"}, self.paths)["symnavi_server"]["state"], "warn")
 
+    def test_log_output_path(self):
+        empty = P.check_log("", self.paths)
+        self.assertEqual(empty["state"], "ok")                                          # 空欄 = この PC の logs
+        self.assertEqual(empty["folder"], str(self.paths.logs / "actualsdashboard"))
+        self.assertEqual(P.check_log("logs", self.paths)["state"], "missing")           # フルパスでない
+        share = self.tmp / "share" / "logs"
+        r = P.check_log(str(share), self.paths)
+        self.assertEqual((r["state"], r["folder"]), ("ok", str(share / "actualsdashboard")))
+        self.assertIn("actualsdashboard_記録_", r["message"])
+        self.assertTrue((share / "actualsdashboard").is_dir())
+        bad = self.tmp / "file"
+        bad.write_text("x")
+        r = P.check_log(str(bad), self.paths)                                           # 書けなくても止まらない
+        self.assertNotEqual(r["state"], "ok")
+        self.assertIn("この PC の", r["message"])
+        self.assertEqual(P.check_all({}, self.paths)["log_dir"]["state"], "ok")
+
     def test_work_dir_not_in_localappdata(self):
         old = os.environ.get("LOCALAPPDATA")
         os.environ["LOCALAPPDATA"] = str(self.tmp / "AppData")

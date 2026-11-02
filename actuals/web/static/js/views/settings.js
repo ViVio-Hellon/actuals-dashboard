@@ -40,7 +40,8 @@ export async function render(main, ctx, stale) {
   const row = (f, i) => `<tr data-key="${f.key}">
       <th class="t"><span class="paths__no">${i}</span>${esc(f.label)}<div class="note">${esc(f.note)}</div></th>
       <td class="t"><input class="input paths__input" data-key="${f.key}" value="${esc(val(f.key))}" spellcheck="false"
-           ${f.kind === "number" ? 'inputmode="numeric" style="max-width:8em"' : ""}>
+           ${f.kind === "number" ? 'inputmode="numeric" style="max-width:8em"' : ""}
+           ${f.key === "log_dir" ? `placeholder="空欄 = この PC の logs（例 \\\\サーバー\\共有\\logs）"` : ""}>
            <div class="note" data-res="${f.key}"></div></td>
       <td class="t nowrap">${isPath(f) ? `<button class="btn btn--sm" type="button" data-pick="${f.key}" data-kind="${esc(f.kind)}">選ぶ…</button>
           <button class="btn btn--sm" type="button" data-open="${f.key}" title="エクスプローラーで開く">開く</button>` : ""}</td>
@@ -134,10 +135,11 @@ export async function render(main, ctx, stale) {
   }
   for (const b of main.querySelectorAll("[data-open]")) {
     b.addEventListener("click", async () => {
-      const input = main.querySelector(`input[data-key="${b.dataset.open}"]`);
-      const path = input.value.includes("{") ? v.resolved[b.dataset.open] : input.value;
+      const key = b.dataset.open;
+      const input = main.querySelector(`input[data-key="${key}"]`);
+      const path = key === "log_dir" ? input.value : (input.value.includes("{") ? v.resolved[key] : input.value);
       try {
-        const r = await api.post("/api/paths/open", { path });
+        const r = await api.post("/api/paths/open", { path, key });
         if (!r.opened) toast("開けませんでした（場所が無いか、Windows 以外です）。", "warn");
       } catch (e) { toastError(e); }
     });

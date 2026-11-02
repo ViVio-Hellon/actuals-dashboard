@@ -179,6 +179,34 @@ def check_work(value: str, paths: Paths) -> Dict[str, Any]:
     return _writable(d, create=True)
 
 
+def log_folder(value: str, paths: Paths) -> Path:
+    """ログを書くフォルダ（<ログの出力パス>\\actualsdashboard。空欄はこの PC の logs の下）。"""
+    from . import logsetup
+    text = (value or "").strip().strip('"')
+    return logsetup.tool_dir(Path(expand(text, paths)) if text else paths.logs)
+
+
+def check_log(value: str, paths: Paths) -> Dict[str, Any]:
+    """ログの出力パス。書けるかと、実際に書くフォルダ・ファイル名を返す。書けなくても止まらない（この PC へ書く）。"""
+    from . import logsetup
+    folder = log_folder(value, paths)
+    names = (f"{logsetup.text_name(logsetup.pc_name(), datetime.now().date())}・"
+             f"{logsetup.event_name(logsetup.pc_name(), datetime.now().date())}")
+    text = (value or "").strip()
+    if not text:
+        return _item("ok", f"未設定のため、この PC の {folder} に書きます（{names}）。"
+                           "共有フォルダを指定すると全 PC の分を 1 か所で見られます。", folder=str(folder))
+    from .settings import is_full_path
+    if not is_full_path(expand(text.strip('"'), paths)):
+        return _item("missing", "フルパスで指定してください（例 \\\\サーバー\\共有\\logs または D:\\logs）。",
+                     folder=str(folder))
+    r = _writable(folder, create=True)
+    if r["state"] == "ok":
+        return _item("ok", f"使えます。{folder} に書きます（{names}）。", folder=str(folder))
+    return _item(r["state"], f"{r['message']} このままでもツールは止まらず、この PC の "
+                             f"{log_folder('', paths)} に書きます。", folder=str(folder))
+
+
 def check_all(values: Dict[str, Any], paths: Paths) -> Dict[str, Any]:
     from . import credentials
     v = {k: str(values.get(k) if values.get(k) is not None else "") for k in (
@@ -194,8 +222,7 @@ def check_all(values: Dict[str, Any], paths: Paths) -> Dict[str, Any]:
         "shared_dir": check_shared(v["shared_dir"], paths),
         "export_dir": _writable(Path(expand(v["export_dir"], paths)), create=True) if v["export_dir"]
         else _item("missing", "未設定です。"),
-        "log_dir": _writable(Path(expand(v["log_dir"], paths)), create=True) if v["log_dir"]
-        else _item("missing", "未設定です。"),
+        "log_dir": check_log(v["log_dir"], paths),
         "work_dir": check_work(v["work_dir"], paths),
         "cscript_path": check_exe(v["cscript_path"], paths, missing_state="warn",
                                   what="Excel 経由の予備の取り出しだけで使うので、ふつうは無くても動きます。"),

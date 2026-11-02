@@ -218,5 +218,34 @@ class WebTest(unittest.TestCase):
         self.assertEqual(err[0]["process"], "画面の読み込み /api/history")
         self.assertEqual(err[0]["error_type"], "KeyError")
 
+    def test_13_set_log_output_path(self):
+        """ログの出力パスを画面から指定 → 保存するとすぐ、その下の actualsdashboard に書く。"""
+        from actuals import logsetup as L
+        try:
+            code, s = self.call("/api/settings")
+            self.assertEqual(s["values"]["log_dir"], "")                                  # 既定は空欄（この PC の logs）
+            code, body = self.call("/api/settings", {"values": {"log_dir": "logs"}, "revision": s["revision"]})
+            self.assertEqual(code, 422)
+            self.assertIn("フルパス", body["error"]["message"])
+            out = self.tmp / "共有" / "logs"
+            code, r = self.call("/api/settings", {"values": {"log_dir": str(out)}, "revision": s["revision"]})
+            self.assertEqual(code, 200)
+            code, s2 = self.call("/api/settings")
+            self.assertEqual(s2["values"]["log_dir"], str(out))
+            self.assertEqual(s2["log"]["wanted"], str(out / "actualsdashboard"))
+            self.call("/api/export", {"kind": "month", "y": 2022, "m": 6, "cal": "genba"})
+            L.flush()
+            names = sorted(p.name for p in (out / "actualsdashboard").iterdir())
+            self.assertTrue(any(n.startswith("actualsdashboard_記録_") for n in names), names)
+            ev = (out / "actualsdashboard" / L.event_name(L.pc_name(), __import__("datetime").date.today()))
+            self.assertIn("CSV の書き出し", ev.read_text(encoding="utf-8"))
+            code, s3 = self.call("/api/settings")
+            code, r = self.call("/api/settings", {"values": {"log_dir": ""}, "revision": s3["revision"]})
+            self.assertEqual(code, 200)
+            code, s4 = self.call("/api/settings")
+            self.assertEqual(s4["log"]["wanted"], str(self.paths.logs / "actualsdashboard"))
+        finally:
+            L.detach()
+
 if __name__ == "__main__":
     unittest.main()

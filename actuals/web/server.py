@@ -438,6 +438,13 @@ def make_handler(app: WebApp):
             if path == "/api/paths/check":
                 return self._json(200, paths_check.check_all(d.get("values") or {}, app.paths))
             if path == "/api/paths/open":
+                if d.get("key") == "log_dir":      # ログは <出力パス>\actualsdashboard を開く（無ければ作る）
+                    folder = paths_check.log_folder(str(d.get("path") or ""), app.paths)
+                    try:
+                        folder.mkdir(parents=True, exist_ok=True)
+                    except OSError:
+                        pass
+                    return self._json(200, {"opened": paths_check.open_path(str(folder)), "folder": str(folder)})
                 return self._json(200, {"opened": paths_check.open_path(str(d.get("path") or ""))})
             if path == "/api/settings":
                 t0 = time.monotonic()

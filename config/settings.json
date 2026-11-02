@@ -4,7 +4,7 @@
   "symnavi_server": "NlmFaNgyNavd",
   "shared_dir": "",
   "export_dir": "{DATA}/export",
-  "log_dir": "{DATA}/logs",
+  "log_dir": "",
   "work_dir": "{DATA}/work",
   "startup_wait_sec": 20,
   "result_wait_sec": 120,

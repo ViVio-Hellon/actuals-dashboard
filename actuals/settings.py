@@ -67,7 +67,7 @@ class Paths:
 GROUPS: Dict[str, str] = {
     "extract": "① データ更新（SymNavi で RNE を実行して、当月の倉入実績を取り出す）",
     "store": "② 集計データの置き場所",
-    "output": "③ 書き出しと記録",
+    "output": "③ 書き出しとログ",
     "advanced": "詳しい設定（ふつうは変えない）",
 }
 EDITABLE: List[Tuple[str, str, str, str, str]] = [
@@ -83,10 +83,10 @@ EDITABLE: List[Tuple[str, str, str, str, str]] = [
     ("export_dir", "output", "CSV の書き出し先",
      "月の集計・明細・年の集計の「CSV に」ボタンで書くフォルダ。", "dir"),
     ("log_dir", "output", "ログの出力パス",
-     "動きの記録。困った時に原因を追うために使う。この下に actualsdashboard フォルダを作り、"
-     "actualsdashboard_<PC名>_<日付>.log（動いた記録）と actualsdashboard_記録_<PC名>_<日付>.jsonl（出来事）を書く。"
-     "共有フォルダにすると全 PC の分を 1 か所で見られる（名前に PC 名が入るので混ざらない）。"
-     "空欄・届かない時はこの PC の logs に同じ形で書く。", "dir"),
+     "ログ（動きの記録）を書く場所。困った時に原因を追うために使う。この下に actualsdashboard フォルダを作って書く"
+     "（出力パスの直下には置かない）。共有フォルダ（例 \\\\サーバー\\共有\\logs）にすると全 PC の分を 1 か所で見られる"
+     "（名前に PC 名が入るので混ざらない）。空欄ならこの PC の logs。届かない時もこの PC の logs に書き、止まらない。"
+     "保存するとすぐ切り替わる（再起動は不要）。", "dir"),
     ("work_dir", "advanced", "作業フォルダ",
      "SymNavi に結果を一時的に保存させる場所（取り込んだら消す）。%LOCALAPPDATA% の中は不可"
      "（Microsoft Store 版の Python だと SymNavi から見えない）。", "dir"),
@@ -108,6 +108,12 @@ class SettingsInputError(ValueError):
 
 def expand(value: str, paths: Paths) -> str:
     return str(value or "").replace("{DATA}", str(paths.base)).replace("{APP_ROOT}", str(APP_ROOT))
+
+
+def is_full_path(text: str) -> bool:
+    """フルパスか（C:\\…・\\\\サーバー\\…・/…）。Windows の形はどの OS でも見分ける。"""
+    import ntpath
+    return bool(text) and (os.path.isabs(text) or ntpath.isabs(text))
 
 
 class Settings:
@@ -170,6 +176,9 @@ class Settings:
                     raise SettingsInputError("秒数は 1〜3600 で入れてください。")
             else:
                 v = str(v or "").strip().strip('"')
+                if k == "log_dir" and v and not is_full_path(expand(v, self.paths)):
+                    raise SettingsInputError("ログの出力パスはフルパスで入れてください（例 \\\\サーバー\\共有\\logs）。"
+                                             "空欄ならこの PC の logs に書きます。")
             before = cur.get(k, defaults.get(k))
             if v == defaults.get(k):
                 cur.pop(k, None)
