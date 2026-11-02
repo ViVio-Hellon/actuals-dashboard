@@ -1,33 +1,50 @@
 /*
   tokens.actuals.css — このツールで足した色（tokens.css と同じ 3 状態の形）
 
-  グラフの重量（棒）と枚数（線）。旧 ｸﾞﾗﾌ シートと同じく「重量は棒、枚数は線」。
-  棒は実行の青（--act-run）の系統、線は印刷の橙（--act-print）の系統から取り、
-  python-web-tools の色の意味と衝突しないよう、塗りは淡く・線ははっきりさせる。
+  グラフの色は all-tools（日報複合ツール）の tokens.css と同じ値（色覚の検証を通した値なので触らない）:
+    直      Excel のグラフと同じ並び 1 直 青・2 直 赤・3 直 緑（表の直の札も同じ色の淡い地）
+    枚数の線 累積の線と同じ紫（Paul Tol の purple）。直のどの色とも離れていて、棒の上を横切っても紛れない
+    1 色の棒 直の無い時（太陽暦）。Excel の 1 系列目と同じ青
+  旧 ｸﾞﾗﾌ シートと同じく「重量は棒、枚数は線」。
 */
 :root{
-  --chart-weight:#5d8fd0;
-  --chart-count:#923d23;
+  --chart-total:#4F81BD;
+  --shift-1:#4F81BD; --shift-1-bg:#eaf0f8;
+  --shift-2:#C0504D; --shift-2-bg:#f9ecec;
+  --shift-3:#9BBB59; --shift-3-bg:#f1f6e8;
+  --chart-count:#AA4499;
   --chart-grid:#e3eaee;
   --chart-axis:#5b6d79;
+  --chart-sun:#f1f6f8;
+  --chart-sun-ink:#b4232a;
   --cell-zero:#a8b6bf;
   --row-unclassified:#fff6ec;
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
-    --chart-weight:#4f7fbf;
-    --chart-count:#f0a07a;
+    --chart-total:#7BA7DE;
+    --shift-1:#7BA7DE; --shift-1-bg:#1b2540;
+    --shift-2:#DE7B78; --shift-2-bg:#2a1b1b;
+    --shift-3:#B4D47C; --shift-3-bg:#1f2a17;
+    --chart-count:#AA4499;
     --chart-grid:#26313a;
     --chart-axis:#95a7b2;
+    --chart-sun:#1d272f;
+    --chart-sun-ink:#e49093;
     --cell-zero:#4c5b66;
     --row-unclassified:#2c2116;
   }
 }
 :root[data-theme="dark"]{
-  --chart-weight:#4f7fbf;
-  --chart-count:#f0a07a;
+  --chart-total:#7BA7DE;
+  --shift-1:#7BA7DE; --shift-1-bg:#1b2540;
+  --shift-2:#DE7B78; --shift-2-bg:#2a1b1b;
+  --shift-3:#B4D47C; --shift-3-bg:#1f2a17;
+  --chart-count:#AA4499;
   --chart-grid:#26313a;
   --chart-axis:#95a7b2;
+  --chart-sun:#1d272f;
+  --chart-sun-ink:#e49093;
   --cell-zero:#4c5b66;
   --row-unclassified:#2c2116;
 }

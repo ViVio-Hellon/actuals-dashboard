@@ -7,7 +7,7 @@
 */
 import { api, qs } from "../api.js";
 import { toast, toastError } from "../toast.js";
-import { chartSvg } from "../chartplan.js";
+import { chartSvg, legendHtml } from "../chartplan.js";
 import { $, esc, isSunday, kg, n0, ymLabel } from "../util.js";
 
 let chartMode = "total";
@@ -59,7 +59,7 @@ export async function render(main, ctx, stale) {
       </section>
       <section class="card" aria-label="グラフ">
         <header><h3>${esc(v.sel_label)}</h3>
-          <span class="legend"><span><i class="w"></i>重量（棒）</span><span><i class="c"></i>枚数（線）</span></span>
+          <span class="legend" id="legend" aria-label="凡例"></span>
           <div class="seg" role="group" aria-label="グラフ">
             <button class="seg__btn" type="button" data-chart="total" aria-pressed="${chartMode === "total"}">合計</button>
             <button class="seg__btn" type="button" data-chart="shift" aria-pressed="${chartMode === "shift"}">直別</button>
@@ -127,10 +127,14 @@ function drawCharts(v) {
   box.innerHTML = "";
   const plans = chartMode === "total" ? [v.charts.total] : v.charts.shift;
   box.className = chartMode === "total" ? "charts" : "charts charts--shift";
+  // 凡例: 合計は積んだ段（1〜3 直）+ 枚数、直別は 3 つの直の色 + 枚数（色の意味は画面のどこでも同じ）
+  $("#legend").innerHTML = legendHtml(chartMode === "total" ? v.charts.total.legend
+    : [...v.charts.shift.map((p) => ({ ...p.legend[0], label: p.title })), { label: "枚数", mark: "count", shape: "line" }]);
   for (const p of plans) {
     const t = document.createElement("div");
     t.className = "chart__title";
-    t.innerHTML = `${esc(p.title)}<small>重量 ${kg(p.weight_total)} kg・枚数 ${n0(p.count_total)} 枚</small>${p.note ? `<small>${esc(p.note)}</small>` : ""}`;
+    const sw = chartMode === "shift" ? `<i class="lg__sw lg__sw--bar mark-${esc(p.legend[0].mark)}"></i>` : "";
+    t.innerHTML = `${sw}${esc(p.title)}<small>重量 ${kg(p.weight_total)} kg・枚数 ${n0(p.count_total)} 枚</small>${p.note ? `<small>${esc(p.note)}</small>` : ""}`;
     box.appendChild(t);
     box.appendChild(chartSvg(p));
   }
@@ -169,7 +173,8 @@ function drawDetail(v, ctx) {
   const numCols = new Set([1, 2, 3, 10, 11, 12, 13, 16, 17, 18, 23, 24]);
   t.innerHTML = `<thead><tr>${v.detail_headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead>
     <tbody>${v.detail.map((r) => `<tr data-lot="${esc(r[4])}" tabindex="0">${r.map((c, i) =>
-      `<td class="${numCols.has(i) ? "n" : ""}">${i === 23 ? kg(c) : esc(c)}</td>`).join("")}</tr>`).join("")
+      `<td class="${numCols.has(i) ? "n" : ""}">${i === 23 ? kg(c) : i === 3 && [1, 2, 3].includes(Number(c))
+        ? `<span class="shift-chip mark-shift-${Number(c)}">${esc(c)}</span>` : esc(c)}</td>`).join("")}</tr>`).join("")
       || `<tr><td colspan="${v.detail_headers.length}">ありません</td></tr>`}</tbody>`;
   for (const tr of t.querySelectorAll("tr[data-lot]")) {
     tr.addEventListener("click", () => ctx.openLot(tr.dataset.lot));

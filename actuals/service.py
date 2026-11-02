@@ -155,11 +155,8 @@ class Service:
         unclassified = [r for r in in_month if r.override is None and r.auto is None]
         overridden = [r for r in in_month if r.override is not None]
         sel_label = "全グループ（板形状のみ）" if sel == A.ALL else f"{sel} {names[sel - 1] or '（名前なし）'}"
-        charts_ = {"total": charts.bar_line(f"{tname}　日別", tw, tc, dim),
-                   "shift": [charts.bar_line(f"{k}直", shift[k]["weight"], shift[k]["count"], dim,
-                                             note="太陽暦では直を出しません（旧ツールと同じ）" if cal == TAIYO else "",
-                                             height=170)
-                             for k in (1, 2, 3)]}
+        charts_ = charts.month_charts(f"{tname}　日別", tw, tc, shift, dim, y, m, with_shift=cal == GENBA,
+                                      shift_note="太陽暦では直を出しません（旧ツールと同じ）" if cal == TAIYO else "")
         prev, nxt = _shift_month(y, m, -1), _shift_month(y, m, 1)
         return {
             "year": y, "month": m, "cal": cal, "cal_label": CALENDARS[cal], "days_in_month": dim,

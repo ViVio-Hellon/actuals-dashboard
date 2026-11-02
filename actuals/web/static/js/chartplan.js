@@ -1,9 +1,11 @@
 /*
-  chartplan.js — 描画計画を SVG にする（python-web-tools の svgplan.js と同じ分け方）
+  chartplan.js — 描画計画を SVG にする（python-web-tools の svgplan.js・all-tools 日報の chart.js と同じ分け方）
 
-  **計算はしない。** 座標・目盛り・文字はサーバ（actuals/charts.py）が決める。
-  色は計画に入っている tokens の名前（--chart-weight など）をそのまま使う。
+  **計算はしない。色も決めない。** 座標・目盛り・文字・色の印（mark-shift-1 など）はサーバ（actuals/charts.py）が
+  決める。ここは計画の class 名をそのまま書き、色は CSS（tokens.actuals.css）が付ける。
 */
+
+import { esc } from "./util.js";
 
 const NS = "http://www.w3.org/2000/svg";
 
@@ -28,16 +30,20 @@ export function chartSvg(plan) {
     if (it.t === "line") {
       svg.appendChild(el("line", { x1: it.x1, y1: it.y1, x2: it.x2, y2: it.y2, class: it.cls }));
     } else if (it.t === "rect") {
-      svg.appendChild(tip(el("rect", { x: it.x, y: it.y, width: it.w, height: it.h, rx: 1.5,
-                                       style: `fill: var(${it.fill})` }), it.tip));
+      svg.appendChild(tip(el("rect", { x: it.x, y: it.y, width: it.w, height: it.h, class: it.cls }), it.tip));
     } else if (it.t === "polyline") {
-      svg.appendChild(el("polyline", { points: it.points.map((p) => p.join(",")).join(" "),
-                                       style: `fill: none; stroke: var(${it.stroke}); stroke-width: 1.8` }));
+      svg.appendChild(el("polyline", { points: it.points.map((p) => p.join(",")).join(" "), class: it.cls }));
     } else if (it.t === "dot") {
-      svg.appendChild(tip(el("circle", { cx: it.x, cy: it.y, r: it.r, style: `fill: var(${it.fill})` }), it.tip));
+      svg.appendChild(tip(el("circle", { cx: it.x, cy: it.y, r: it.r, class: it.cls }), it.tip));
     } else if (it.t === "text") {
       svg.appendChild(el("text", { x: it.x, y: it.y, "text-anchor": it.anchor, class: it.cls }, it.text));
     }
   }
   return svg;
+}
+
+/** 凡例。**形でも分ける**（棒は四角、線は横棒）── 色が見分けにくくても何の印か分かる。 */
+export function legendHtml(items) {
+  return (items || []).map((g) =>
+    `<span class="lg"><i class="lg__sw lg__sw--${esc(g.shape)} mark-${esc(g.mark)}"></i>${esc(g.label)}</span>`).join("");
 }

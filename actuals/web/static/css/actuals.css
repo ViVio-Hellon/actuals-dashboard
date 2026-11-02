@@ -37,14 +37,46 @@
 .chart { width: 100%; height: auto; display: block; }
 .chart .grid { stroke: var(--chart-grid); stroke-width: 1; }
 .chart .base { stroke: var(--chart-axis); stroke-width: 1; }
-.chart .axis { fill: var(--chart-axis); font-size: 11px; font-family: var(--sans); }
-.chart rect:hover, .chart circle:hover { opacity: .75; }
-.chart__title { display: flex; gap: 12px; align-items: baseline; font-size: var(--fs-sm); font-weight: 700; padding: 0 2px; }
+.chart .sun { fill: var(--chart-sun); }
+.chart .axis { fill: var(--chart-axis); font-size: 11px; font-family: var(--sans); font-variant-numeric: tabular-nums; }
+.chart .axis--head { font-weight: 700; }
+.chart .axis--count { fill: var(--chart-count); }
+.chart .axis--day { font-size: 10px; }
+.chart .axis--sun { fill: var(--chart-sun-ink); font-weight: 700; }
+/* 棒。色を決めるのはサーバの印（mark-*）。積んだ段のあいだに地の色の細い境（濃淡だけに頼らない） */
+.chart .bar { fill: var(--chart-total); }
+.chart .bar--seg { stroke: var(--surface); stroke-width: 1; }
+.chart .mark-total { fill: var(--chart-total); }
+.chart .bar.mark-shift-1 { fill: var(--shift-1); }
+.chart .bar.mark-shift-2 { fill: var(--shift-2); }
+.chart .bar.mark-shift-3 { fill: var(--shift-3); }
+/* 枚数の線は太く、地の色の縁取りを下に敷く（棒を横切るところで棒に溶けない。all-tools と同じ） */
+.chart .line { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.chart .line--halo { stroke: var(--surface); stroke-width: 6; }
+.chart .line.mark-count { stroke: var(--chart-count); stroke-width: 2.5; }
+.chart .dot.mark-count { fill: var(--chart-count); stroke: var(--surface); stroke-width: 1.5; }
+/* 日ごとの当たり。指した日を薄く示し、その日の数字を出す */
+.chart .hit { fill: transparent; }
+.chart .hit:hover { fill: var(--ink); fill-opacity: .06; }
+.chart__title { display: flex; gap: 12px; align-items: center; font-size: var(--fs-sm); font-weight: 700; padding: 0 2px; }
 .chart__title small { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
-.legend { display: inline-flex; gap: 12px; font-size: var(--fs-xs); color: var(--muted); font-weight: 400; }
-.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
-.legend i.w { background: var(--chart-weight); }
-.legend i.c { background: var(--chart-count); height: 3px; vertical-align: 2px; }
+.chart__title .lg__sw { margin-right: -6px; }
+/* 凡例。**形でも分ける**: 棒は四角、線は横棒 */
+.legend { display: inline-flex; flex-wrap: wrap; gap: 4px 14px; font-size: var(--fs-xs); color: var(--ink); font-weight: 400; }
+.lg { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.lg__sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; flex: none; }
+.lg__sw--line { width: 18px; height: 0; border-radius: 0; border-top: 3px solid currentColor; }
+.lg__sw--bar.mark-total { background: var(--chart-total); }
+.lg__sw--bar.mark-shift-1 { background: var(--shift-1); }
+.lg__sw--bar.mark-shift-2 { background: var(--shift-2); }
+.lg__sw--bar.mark-shift-3 { background: var(--shift-3); }
+.lg__sw--line.mark-count { color: var(--chart-count); }
+/* 表の直の札（グラフと同じ色の淡い地。表で 1 直が青なら、グラフでも青） */
+.shift-chip { display: inline-block; min-width: 1.6em; text-align: center; padding: 0 4px; border-radius: 3px;
+              font-weight: 700; border-left: 3px solid; }
+.shift-chip.mark-shift-1 { background: var(--shift-1-bg); border-color: var(--shift-1); }
+.shift-chip.mark-shift-2 { background: var(--shift-2-bg); border-color: var(--shift-2); }
+.shift-chip.mark-shift-3 { background: var(--shift-3-bg); border-color: var(--shift-3); }
 .note { font-size: var(--fs-xs); color: var(--muted); }
 
 /* グループ×日の表（旧 月集計シート）。日の列は詰める */
@@ -123,6 +155,7 @@ textarea.input { width: 100%; min-height: 120px; font-family: var(--mono); font-
   .view { overflow: visible; padding: 0; }
   .tablewrap { max-height: none !important; overflow: visible; }
   .month-top { grid-template-columns: 0.8fr 2fr; }
+  .chart, .legend, .shift-chip, .chart__title { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 
 /* パスの設定・「選ぶ…」の窓 */
