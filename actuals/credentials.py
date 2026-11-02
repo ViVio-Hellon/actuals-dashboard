@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
+from . import logsetup
 from .settings import Paths
 
 
@@ -29,7 +31,13 @@ def _rneconverter_file() -> Path:
 
 
 def load(paths: Paths) -> Tuple[Dict[str, str], str]:
-    """(ID・パスワード, どこのものか)。"""
+    """(ID・パスワード, どこのものか)。読んだパスワードはログに出さないよう覚えさせる。"""
+    cred, where = _load(paths)
+    logsetup.secret(cred["pass"])
+    return cred, where
+
+
+def _load(paths: Paths) -> Tuple[Dict[str, str], str]:
     own = _read(paths.config / "credentials.json")
     if own["id"] and own["pass"]:
         return own, "このツール"
@@ -58,8 +66,11 @@ def save(paths: Paths, user_id: str, password: str) -> Dict[str, Any]:
     new = {"id": user_id, "pass": password if password else cur["pass"]}
     if not new["pass"]:
         raise ValueError("パスワードを入れてください。")
+    logsetup.secret(new["pass"])
+    t0 = time.monotonic()
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(new, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, p)
+    logsetup.saved("SymNavi のログイン（中身は書かない）", p, 1, time.monotonic() - t0, id=new["id"])
     return status(paths)

@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional
 
+from . import logsetup
+
 log = logging.getLogger("actuals.update")
 
 TAG = "KURAIRE"
@@ -68,7 +70,8 @@ class UpdateRunner:
             self.ok, self.message, self.after, self.progress, self.step = None, "", {}, 0.0, "開始"
             self.cancelled = False
             self.started, self.finished = time.time(), None
-            self.thread = threading.Thread(target=self._run, args=(job,), name="data-update", daemon=True)
+            self.thread = threading.Thread(target=self._run, args=(job, logsetup.current_operation()),
+                                           name="data-update", daemon=True)
             self.thread.start()
 
     def _report(self, frac: Optional[float], text: str) -> None:
@@ -78,21 +81,25 @@ class UpdateRunner:
             self.step = text
             self.lines.append(f"{time.strftime('%H:%M:%S')} {text}")
 
-    def _run(self, job) -> None:
+    def _run(self, job, op: str = "-") -> None:
+        logsetup.set_operation(op)            # 押した時の操作番号のまま記録する
         handler = _Lines(self.lines)
         logging.getLogger("actuals.symnavi").addHandler(handler)
         try:
-            self.after = job(self._report) or {}
+            with logsetup.timed("データ更新", expected=lambda e: self.cancelled):
+                self.after = job(self._report) or {}
             self.ok = True
             self.message = "取り込みました"
-        except Exception as e:  # noqa: BLE001
-            log.exception("データ更新に失敗")
-            self.after = {"error": str(e)}
-            self.message = ("中断しました" if self.cancelled else str(e)) or type(e).__name__
+        except Exception as e:  # noqa: BLE001  記録は timed が残した（中断は WARNING、ほかは ERROR とエラー番号）
+            ref = getattr(e, "_log_ref", "")
+            self.after = {"error": str(e), "ref": ref}
+            self.message = ("中断しました" if self.cancelled else
+                            (f"{e}（{ref}）" if ref else str(e))) or type(e).__name__
             self.ok = False
         finally:
             logging.getLogger("actuals.symnavi").removeHandler(handler)
             self.finished = time.time()
+            logsetup.clear_operation()
 
     def cancel(self) -> bool:
         if not self.running:
@@ -129,7 +136,9 @@ def extract_rows(rne_path: Path, work_dir: Path, exe: str, server: str, credenti
             ext.close_session()
         except Exception:  # noqa: BLE001
             log.warning("SymNavi を閉じる時にエラー", exc_info=True)
+    t0 = time.monotonic()
     columns, raw = read_tsv(tsv)
+    logsetup.loaded("SymNavi の結果（倉入実績）", tsv, len(raw), time.monotonic() - t0, columns=len(columns))
     try:
         tsv.unlink()
     except OSError:

@@ -82,8 +82,11 @@ EDITABLE: List[Tuple[str, str, str, str, str]] = [
      "全員が同じ集計を見る（どの PC で「データ更新」しても全員に反映）。空欄ならこの PC の中だけに保存（試用）。", "dir"),
     ("export_dir", "output", "CSV の書き出し先",
      "月の集計・明細・年の集計の「CSV に」ボタンで書くフォルダ。", "dir"),
-    ("log_dir", "output", "ログの保存先",
-     "動きの記録。困った時に原因を追うために使う。共有フォルダにすると全 PC の分を 1 か所で見られる。", "dir"),
+    ("log_dir", "output", "ログの出力パス",
+     "動きの記録。困った時に原因を追うために使う。この下に actualsdashboard フォルダを作り、"
+     "actualsdashboard_<PC名>_<日付>.log（動いた記録）と actualsdashboard_記録_<PC名>_<日付>.jsonl（出来事）を書く。"
+     "共有フォルダにすると全 PC の分を 1 か所で見られる（名前に PC 名が入るので混ざらない）。"
+     "空欄・届かない時はこの PC の logs に同じ形で書く。", "dir"),
     ("work_dir", "advanced", "作業フォルダ",
      "SymNavi に結果を一時的に保存させる場所（取り込んだら消す）。%LOCALAPPDATA% の中は不可"
      "（Microsoft Store 版の Python だと SymNavi から見えない）。", "dir"),

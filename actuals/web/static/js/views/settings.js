@@ -79,7 +79,12 @@ export async function render(main, ctx, stale) {
     <section class="card"><header><h3>いまの状態</h3></header><div class="pad">
       <dl class="facts">
         <dt>いま使っている共有フォルダ</dt><dd>${esc(v.resolved.shared_dir)}${v.resolved.shared_configured ? "" : "（未設定のため、この PC の中）"}</dd>
-        <dt>いま書いているログ</dt><dd>${esc(v.log_dir)}</dd>
+        <dt>いま書いているログ</dt><dd>${esc(v.log.dir)}\\${esc(v.log.text_file)}<br>
+          <span class="note">出来事（起動・終了・処理時間・読込・保存・警告・エラー・操作）: ${esc(v.log.event_file)}。
+          3 秒以上かかった処理は WARNING、エラーはエラー番号つきで残ります。</span>
+          ${v.log.problem ? `<div class="note" style="color:var(--act-danger)">${esc(v.log.problem)}</div>` : ""}</dd>
+        ${v.log.legacy.length ? `<dt>前の形のログ</dt><dd>${v.log.legacy.map(esc).join("<br>")}
+          <span class="note">（v0.1.0 まで。移さず・もう書きません。古いものの片付けだけ同じに行います）</span></dd>` : ""}
         <dt>設定の既定値</dt><dd>ツールのフォルダの config\\settings.json（ここで変えた項目だけ、データの場所の config\\settings.json に残ります。全 PC に同じ既定を配る時はツール側を書き換えて配ります）</dd>
       </dl></div></section>
   </div>`;

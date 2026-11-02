@@ -1,5 +1,6 @@
 """画面の API（サーバーを実際に立てて呼ぶ）。"""
 import json
+import re
 import os
 import shutil
 import tempfile
@@ -191,6 +192,31 @@ class WebTest(unittest.TestCase):
         code, s = self.call("/api/settings")
         code, body = self.call("/api/settings", {"values": {"result_wait_sec": "abc"}, "revision": s["revision"]})
         self.assertEqual(code, 422)
+
+    def test_12_unexpected_error_ref_matches_log(self):
+        from actuals import logsetup as L
+        svc = self.holder["app"].service
+        logs = self.tmp / "logs12"
+        L.setup(str(logs), self.tmp / "local12", version="t")
+        old = svc.history_summary
+
+        def broken():
+            raise KeyError("壊れた行")
+        svc.history_summary = broken
+        try:
+            code, body = self.call("/api/history")
+        finally:
+            svc.history_summary = old
+            L.flush()
+            L.detach()
+        self.assertEqual(code, 500)
+        ref = re.search(r"E \d{6}-\d{6}-[0-9a-f]{2}", body["error"]["message"]).group(0)
+        ev = [json.loads(x) for f in (logs / L.TOOL_ID).glob("*.jsonl")
+              for x in f.read_text(encoding="utf-8").splitlines()]
+        err = [e for e in ev if e["kind"] == "エラー"]
+        self.assertEqual([e["ref"] for e in err], [ref])
+        self.assertEqual(err[0]["process"], "画面の読み込み /api/history")
+        self.assertEqual(err[0]["error_type"], "KeyError")
 
 if __name__ == "__main__":
     unittest.main()

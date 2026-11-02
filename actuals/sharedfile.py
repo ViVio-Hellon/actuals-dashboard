@@ -26,7 +26,9 @@ import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple, TypeVar, Union
+
+from . import logsetup
 
 log = logging.getLogger("actuals.shared")
 T = TypeVar("T")
@@ -120,12 +122,16 @@ class SharedFile:
             if self.copy_path.exists() and self._cached_fp() == list(fp):
                 return False
             tmp = self.copy_path.with_suffix(".copying")
+            t0 = time.monotonic()
             try:
                 within(lambda: shutil.copyfile(self.shared, tmp), max(self.net_timeout, 30))
                 os.replace(tmp, self.copy_path)
             except (_TimedOut, OSError) as e:
                 self.stale, self.last_error = True, f"共有のファイルを写せません: {e}"
+                log.warning("共有のファイルを写せません（手元の控えで続けます）: %s（%s）", self.shared, e)
                 return False
+            logsetup.loaded("共有のファイルを手元に写す（ほかの PC の保存を反映）", self.shared, None,
+                            time.monotonic() - t0, bytes=fp[0])
             self.fp_path.write_text(json.dumps({"fp": list(fp), "at": now_text()}), encoding="utf-8")
             return True
 
@@ -137,6 +143,7 @@ class SharedFile:
     @contextmanager
     def read(self) -> Iterator[Optional[sqlite3.Connection]]:
         """手元の写しを読み取り専用で開く。まだ一度も作られていなければ None。"""
+        logsetup.using(self.shared)
         self.refresh()
         if not self.copy_path.exists():
             yield None
@@ -193,8 +200,14 @@ class SharedFile:
         except OSError as e:
             log.warning("ロックを消せません: %s (%s)", self.lock_path, e)
 
-    def write(self, mutate: Callable[[sqlite3.Connection], T]) -> T:
-        """ロックを取り、手元で直してから共有を差し替える。mutate は 1 トランザクションの中で呼ばれる。"""
+    def write(self, mutate: Callable[[sqlite3.Connection], T], what: str = "",
+              count: Union[None, int, Callable[[T], Optional[int]]] = None) -> T:
+        """ロックを取り、手元で直してから共有を差し替える。mutate は 1 トランザクションの中で呼ばれる。
+
+        what・count はログ（保存先・件数・処理時間）に書くため。count は結果から数える関数でもよい。
+        """
+        t0 = time.monotonic()
+        logsetup.using(self.shared)
         try:
             within(lambda: self.shared.parent.mkdir(parents=True, exist_ok=True), self.net_timeout)
         except (_TimedOut, OSError) as e:
@@ -232,6 +245,11 @@ class SharedFile:
                 fp = self._fingerprint()
                 if fp:
                     self.fp_path.write_text(json.dumps({"fp": list(fp), "at": now_text()}), encoding="utf-8")
+                try:
+                    n = count(result) if callable(count) else count
+                except Exception:  # noqa: BLE001
+                    n = None
+                logsetup.saved(what or self.shared.name, self.shared, n, time.monotonic() - t0)
                 return result
             finally:
                 self._release()
@@ -262,9 +280,11 @@ class SharedFile:
             bdir.mkdir(exist_ok=True)
             dst = bdir / f"{self.shared.stem}_{datetime.now():%Y%m%d}{self.shared.suffix}"
             if not dst.exists():
+                t0 = time.monotonic()
                 shutil.copyfile(self.shared, dst)
+                logsetup.saved("その日最初の控え", dst, None, time.monotonic() - t0)
             olds = sorted(bdir.glob(f"{self.shared.stem}_*{self.shared.suffix}"))
             for p in olds[:-self.keep_backups]:
                 p.unlink()
         except OSError as e:
-            log.warning("控えを作れません: %s", e)
+            log.warning("控えを作れません（保存は続けます）: %s", e)

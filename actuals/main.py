@@ -26,15 +26,34 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     paths = Paths.default()
     s = Settings(paths).resolved()
+    from .settings import app_info
     console = bool(sys.stdout and getattr(sys.stdout, "isatty", lambda: False)())
-    logsetup.setup(s["log_dir"], paths.logs, console=console, keep_days=int(s.get("log_keep_days") or 90))
-    if args.stop:
-        from .web.server import stop_running
-        return stop_running(paths)
-    if args.import_workbook:
-        from .service import Service
-        res = Service(paths).import_workbook(args.import_workbook, args.with_conditions)
-        print(json.dumps(res, ensure_ascii=False, indent=1))
-        return 0
-    from .web.server import serve
-    return serve(paths, open_browser=not args.no_browser, port=args.port)
+    logsetup.setup(s["log_dir"], paths.logs, console=console, keep_days=int(s.get("log_keep_days") or 90),
+                   version=str(app_info().get("version") or ""))
+    mode = "stop" if args.stop else "import-workbook" if args.import_workbook else "画面"
+    logsetup.started(mode, data_dir=str(paths.base), log_dir=logsetup.status()["wanted"],
+                     argv=" ".join(sys.argv[1:]))
+    rc = 1
+    try:
+        if args.stop:
+            from .web.server import stop_running
+            with logsetup.timed("stop.bat（動いている画面の終了）"):
+                rc = stop_running(paths)
+            return rc
+        if args.import_workbook:
+            from .service import Service
+            with logsetup.timed("旧ブックからの移行", files=[args.import_workbook]):
+                res = Service(paths).import_workbook(args.import_workbook, args.with_conditions)
+            print(json.dumps(res, ensure_ascii=False, indent=1))
+            rc = 0
+            return rc
+        from .web.server import serve
+        rc = serve(paths, open_browser=not args.no_browser, port=args.port)
+        return rc
+    except BaseException as e:
+        if isinstance(e, Exception):
+            logsetup.record_error(e, where=f"起動（{mode}）")
+        logsetup.set_stop_reason(f"{type(e).__name__}: {e}")
+        raise
+    finally:
+        logsetup.stopped(rc)

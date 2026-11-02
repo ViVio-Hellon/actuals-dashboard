@@ -85,7 +85,7 @@ class MasterStore:
     def ensure(self) -> None:
         """共有のファイルがまだ無ければ初期値で作る。"""
         if not self.file.shared.exists():
-            self.file.write(lambda conn: None)
+            self.file.write(lambda conn: None, what="条件表の初期値", count=0)
 
     # ----- 書く -----
     def save_conditions(self, cs: ConditionSet, base_rev: int, note: str = "") -> ConditionSet:
@@ -104,7 +104,7 @@ class MasterStore:
             conn.execute("UPDATE conditions SET data = ? WHERE id = 1", (_dumps(new.to_dict()),))
             _audit(conn, "conditions", f"rev {new.rev}", cur.to_dict(), new.to_dict(), note)
             return new
-        return self.file.write(mutate)
+        return self.file.write(mutate, what="条件表", count=len(cs.rows))
 
     def set_override(self, lot: str, grp: Optional[int], reason: str, seen: Optional[int]) -> Optional[Dict[str, Any]]:
         """手動訂正を付ける（grp=None で外す）。seen は画面が見ていた値（別の人の変更を上書きしない）。"""
@@ -131,7 +131,7 @@ class MasterStore:
                              "VALUES (:lot, :grp, :reason, :by_user, :by_pc, :at)", after)
             _audit(conn, "override", lot, dict(row) if row else None, after)
             return after
-        return self.file.write(mutate)
+        return self.file.write(mutate, what=f"手動訂正（{lot}）", count=1)
 
     def import_overrides(self, items: Dict[str, Any], note: str) -> int:
         """旧ブックの修正シート A 列を取り込む（既にある訂正は上書きしない）。"""
@@ -151,7 +151,7 @@ class MasterStore:
                 _audit(conn, "override", lot, None, rec, note)
                 n += 1
             return n
-        return self.file.write(mutate)
+        return self.file.write(mutate, what="手動訂正（旧ブックから）", count=lambda n: n)
 
 
 # ======================================================================
@@ -244,7 +244,7 @@ class HistoryStore:
                          (added, changed, same, ",".join(sorted(months)), first_box_end, imp))
             return {"import_id": imp, "rows": len(clean), "added": added, "changed": changed, "same": same,
                     "duplicates": dups, "months": sorted(months)}
-        return self.file.write(mutate)
+        return self.file.write(mutate, what="蓄積した実績", count=lambda r: r["rows"])
 
     # ----- 読む -----
     def lots_in_months(self, cal: str, months: Sequence[str]) -> List[Dict[str, Any]]:

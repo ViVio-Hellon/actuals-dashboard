@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections import OrderedDict
 from datetime import date, datetime
 from pathlib import Path
@@ -16,7 +17,7 @@ from .conditions import (FIELDS, GROUP_COUNT, RULE_NOT_HIT, RULE_NOT_MATERIAL, C
                          blank_warnings, parse_cell, validate)
 from .engine import CALENDARS, GENBA, TAIYO, classify, compute_lot
 from .export import open_folder, write_csv
-from . import credentials
+from . import credentials, logsetup
 from .rne_runner import UpdateRunner
 from .settings import Paths, Settings, app_info
 from .sharedfile import SharedBusy, SharedUnreachable, who
@@ -74,7 +75,7 @@ class Service:
         try:
             self.master.ensure()   # 共有に条件表がまだ無ければ初期値（受領ブックの設定シート）で作る
         except (SharedBusy, SharedUnreachable) as e:
-            log.warning("条件表を用意できません（読むときは初期値を使います）: %s", e)
+            log.warning("条件表を用意できません（読むときは初期値を使って続けます）: %s", e)
 
     def conf(self) -> Dict[str, Any]:
         self._open_stores()
@@ -83,12 +84,16 @@ class Service:
     # ---------- 判定済みの行（キャッシュ） ----------
     def _rows(self, cal: str, months: Sequence[str]) -> Tuple[List[A.Row], ConditionSet]:
         cs = self.master.conditions()                      # 共有の変化はここと次の行で手元に写る
-        raws = self.history.lots_in_months(cal, months)
+        self.history.file.refresh()
         key = (self.history.file.fingerprint(), self.master.file.fingerprint(), cs.rev, cal, tuple(months))
         if key in self._cache:
             self._cache.move_to_end(key)
             return self._cache[key], cs
+        t0 = time.monotonic()
+        raws = self.history.lots_in_months(cal, months)
         ov = {k: v["grp"] for k, v in self.master.overrides().items()}
+        logsetup.loaded(f"集計に使うロット（{CALENDARS.get(cal, cal)} {','.join(months)}）", self.history.file.shared,
+                        len(raws), time.monotonic() - t0, overrides=len(ov), conditions_rev=cs.rev)
         rows = A.make_rows(raws, cs, ov)
         self._cache[key] = rows
         while len(self._cache) > 12:
@@ -316,7 +321,9 @@ class Service:
         p = Path((path or "").strip().strip('"'))
         if not p.is_file():
             raise UserError(f"ファイルがありません: {p}")
+        t0 = time.monotonic()
         src = S.read_sqlite(p, self.paths.cache / "source")
+        logsetup.loaded("取り込むファイル（.sqlite3）", p, len(src["rows"]), time.monotonic() - t0)
         with self._import_mu:
             res = self.history.merge(src["columns"], src["rows"], kind="sqlite", source=str(p),
                                      fingerprint=src["fingerprint"], generated_at=src["meta"].get("generated_at", ""),
@@ -326,18 +333,24 @@ class Service:
         return res
 
     def import_rows(self, columns: List[str], rows: List[Dict[str, Any]], kind: str, source: str) -> Dict[str, Any]:
-        with self._import_mu:
+        with self._import_mu, logsetup.timed("蓄積へ取り込み", files=[self.history.file.shared], kind_of=kind,
+                                             source=source, rows=len(rows)) as fr:
             res = self.history.merge(columns, rows, kind=kind, source=source)
+            fr.note(added=res["added"], changed=res["changed"], same=res["same"])
         self._cache.clear()
         log.info("取り込みました（%s %s）: %s", kind, source, res)
         return res
 
     def import_paste(self, text: str) -> Dict[str, Any]:
+        t0 = time.monotonic()
         cols, rows = S.parse_pasted(text)
+        logsetup.loaded("貼り付けた表", "Excel から貼付け", len(rows), time.monotonic() - t0)
         return self.import_rows(cols, rows, "paste", "Excel から貼付け")
 
     def import_xls(self, data: bytes, name: str) -> Dict[str, Any]:
+        t0 = time.monotonic()
         cols, rows = S.read_xls_bytes(data, self.paths.cache / "upload")
+        logsetup.loaded("選んだ xls", name, len(rows), time.monotonic() - t0, bytes=len(data))
         return self.import_rows(cols, rows, "xls", name)
 
     def import_workbook(self, path: str, with_conditions: bool) -> Dict[str, Any]:
@@ -346,10 +359,14 @@ class Service:
         p = Path(path.strip().strip('"'))
         if not p.is_file():
             raise UserError(f"ファイルがありません: {p}")
+        logsetup.using(p)
+        t0 = time.monotonic()
         with xlsm.Workbook(p) as wb:
             header, rows = xlsm.read_data_rows(wb)
             overrides = xlsm.read_overrides(wb)
             cs = xlsm.read_conditions(wb) if with_conditions else None
+        logsetup.loaded("旧ブックの DATA・修正シート", p, len(rows), time.monotonic() - t0, overrides=len(overrides),
+                        conditions=cs is not None)
         res = self.import_rows(header, rows, "xlsm", p.name)
         res["overrides"] = self.master.import_overrides(overrides, f"旧ブック {p.name} の修正シートから")
         if cs is not None:
@@ -381,10 +398,14 @@ class Service:
         work = Path(s.get("work_dir") or (self.paths.base / "work"))
 
         def job(report):
-            from .rne_runner import extract_rows
-            got = extract_rows(rne, work, s["symnavi_exe"], s.get("symnavi_server") or "NlmFaNgyNavd", cred,
-                               int(s.get("startup_wait_sec") or 20), int(s.get("result_wait_sec") or 120),
-                               s.get("cscript_path") or "", report)
+            from . import rne_runner
+            with logsetup.timed("SymNavi で RNE を実行して取り出す", files=[rne, s["symnavi_exe"], work],
+                                expected=lambda e: self.rne.cancelled, rne=rne.name,
+                                server=s.get("symnavi_server") or "NlmFaNgyNavd") as fr:
+                got = rne_runner.extract_rows(rne, work, s["symnavi_exe"], s.get("symnavi_server") or "NlmFaNgyNavd",
+                                              cred, int(s.get("startup_wait_sec") or 20),
+                                              int(s.get("result_wait_sec") or 120), s.get("cscript_path") or "", report)
+                fr.note(rows=len(got["rows"]))
             report(0.95, f"取り込んでいます（{len(got['rows']):,} 行）")
             res = self.import_rows(got["columns"], got["rows"], "symnavi", rne.name)
             report(1.0, f"{res['rows']:,} 件を取り込みました（追加 {res['added']}・更新 {res['changed']}）")
@@ -414,16 +435,17 @@ class Service:
                 lines.append([g["no"], g["name"], "枚数(枚)", g["count_total"], *g["count"]])
             lines.append(["", "総計", "重量(kg)", v["weight_total"], *v["day_weight"]])
             lines.append(["", "総計", "枚数(枚)", v["count_total"], *v["day_count"]])
-            path = write_csv(folder, f"月集計_{label}_{y}-{m:02d}", header, lines)
+            path = write_csv(folder, f"月集計_{label}_{y}-{m:02d}", header, lines, what="CSV（月の集計）")
         elif kind == "detail":
             v = self.month(y, m, cal, sel)
-            path = write_csv(folder, f"明細_{label}_{y}-{m:02d}_{v['sel_label']}", v["detail_headers"], v["detail"])
+            path = write_csv(folder, f"明細_{label}_{y}-{m:02d}_{v['sel_label']}", v["detail_headers"], v["detail"],
+                             what="CSV（明細）")
         elif kind == "year":
             v = self.year(fy, cal)
             gn = [g["name"] for g in v["groups"]]
             header = ["日付", "重量総計", *[f"重量_{n}" for n in gn], "枚数総計", *[f"枚数_{n}" for n in gn]]
             lines = [[d["date"], d["weight_total"], *d["weight"], d["count_total"], *d["count"]] for d in v["days"]]
-            path = write_csv(folder, f"年集計_{label}_{fy}年度", header, lines)
+            path = write_csv(folder, f"年集計_{label}_{fy}年度", header, lines, what="CSV（年の集計）")
         else:
             raise UserError("書き出す種類が不正です。")
         log.info("CSV を書き出しました: %s", path)

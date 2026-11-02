@@ -33,6 +33,30 @@ from ..stores import Conflict, ImportError_
 
 log = logging.getLogger("actuals.web")
 
+# 業務上ありうる断り（ERROR ではなく WARNING「中断」として残す）
+logsetup.expected_errors(UserError, Conflict, SharedBusy, SharedUnreachable, SourceError, ImportError_,
+                         SettingsError, SettingsInputError, paths_check.PathInputError)
+
+# 操作履歴に残す POST（画面の名前, 残す項目）。パスワードなど秘密は入れない。
+OPERATIONS = {
+    "/api/rne/run": ("データ更新", ()),
+    "/api/rne/cancel": ("データ更新の中断", ()),
+    "/api/import/sqlite": ("取り込み（.sqlite3）", ("path",)),
+    "/api/import/paste": ("取り込み（貼り付け）", ()),
+    "/api/import/xls": ("取り込み（xls）", ()),
+    "/api/import/workbook": ("旧ブックからの移行", ("path", "with_conditions")),
+    "/api/credentials": ("SymNavi のログインの登録", ("id",)),
+    "/api/override": ("手動訂正", ("lot", "grp", "reason")),
+    "/api/conditions": ("条件表の保存", ("rev", "note")),
+    "/api/conditions/preview": ("条件表の影響の確認", ("y", "m", "cal")),
+    "/api/export": ("CSV の書き出し", ("kind", "y", "m", "cal", "sel", "fy")),
+    "/api/export/open": ("書き出し先を開く", ()),
+    "/api/paths/open": ("フォルダを開く", ("path",)),
+    "/api/settings": ("パスの設定の保存", ()),
+    "/api/shutdown": ("ツールの終了", ("force",)),
+}
+QUIET_POSTS = {"/api/paths/check"}     # 入力のたびに来る確認は、遅い・失敗の時だけ残す
+
 STATIC = Path(__file__).resolve().parent / "static"
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                  ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml"}
@@ -243,10 +267,11 @@ def make_handler(app: WebApp):
             app.seen(self.headers.get("X-Tab-Id") or "")
             return True
 
-        def _handle(self, fn) -> None:
+        def _handle(self, fn, name: str = "", quiet: bool = True) -> None:
             logsetup.new_operation_id()
             try:
-                fn()
+                with logsetup.timed(name or f"{self.command} {urlparse(self.path).path}", quiet=quiet):
+                    fn()
             except UserError as e:
                 self._err(422, "rejected", str(e))
             except Conflict as e:
@@ -264,8 +289,7 @@ def make_handler(app: WebApp):
             except paths_check.PathInputError as e:
                 self._err(422, "path", str(e))
             except Exception as e:  # noqa: BLE001
-                ref = logsetup.new_error_ref()
-                log.exception("予期しないエラー %s: %s %s", ref, self.command, self.path)
+                ref = logsetup.record_error(e, where=f"{self.command} {self.path}")   # timed で記録済みなら同じ番号
                 self._err(500, "unexpected", f"予期しないエラーが起きました（{ref}）。ログに詳細があります: "
                                              f"{logsetup.active_dir()}（{type(e).__name__}: {e}）")
             finally:
@@ -284,7 +308,7 @@ def make_handler(app: WebApp):
                 if not self._guard(api=True):
                     return
                 q = parse_qs(u.query)
-                return self._handle(lambda: self._get(u.path, q))
+                return self._handle(lambda: self._get(u.path, q), f"画面の読み込み {u.path}")
             if not self._guard(api=False):
                 return
             name = "index.html" if u.path in ("/", "/index.html") else u.path.lstrip("/")
@@ -340,7 +364,8 @@ def make_handler(app: WebApp):
                                         "fields": [{"key": k, "group": g, "label": lb, "note": n, "kind": kd}
                                                    for k, g, lb, n, kd in EDITABLE],
                                         "groups": GROUPS,
-                                        "data_dir": str(app.paths.base), "log_dir": logsetup.active_dir()})
+                                        "data_dir": str(app.paths.base), "log_dir": logsetup.active_dir(),
+                                        "log": logsetup.status()})
             return self._err(404, "not_found", "not found")
 
         # ----- POST -----
@@ -358,13 +383,24 @@ def make_handler(app: WebApp):
                 return self._json(200, {"ok": True})
             if not self._guard(api=True):
                 return
+            label = OPERATIONS.get(u.path, (u.path, ()))[0]
             if u.path == "/api/import/xls":
                 q = parse_qs(u.query)
-                return self._handle(lambda: self._json(200, svc.import_xls(
-                    self._raw_body(30_000_000), (q.get("name") or ["SymNavi の xls"])[0])))
-            self._handle(lambda: self._post(u.path, self._body()))
+                name = (q.get("name") or ["SymNavi の xls"])[0]
+
+                def run_xls():
+                    logsetup.operation(label, name=name)
+                    self._json(200, svc.import_xls(self._raw_body(30_000_000), name))
+                return self._handle(run_xls, label, quiet=False)
+            self._handle(lambda: self._post(u.path, self._body()), label, quiet=u.path in QUIET_POSTS)
 
         def _post(self, path: str, d: Dict[str, Any]) -> None:
+            if path in OPERATIONS:
+                label, keys = OPERATIONS[path]
+                detail = {k: d.get(k) for k in keys if d.get(k) not in (None, "")}
+                if path == "/api/import/paste":
+                    detail["lines"] = str(d.get("text") or "").count("\n")
+                logsetup.operation(label, **detail)
             if path == "/api/import/sqlite":
                 return self._json(200, svc.import_sqlite(str(d.get("path") or "")))
             if path == "/api/import/paste":
@@ -404,7 +440,9 @@ def make_handler(app: WebApp):
             if path == "/api/paths/open":
                 return self._json(200, {"opened": paths_check.open_path(str(d.get("path") or ""))})
             if path == "/api/settings":
+                t0 = time.monotonic()
                 rev, lines = svc.settings.save(d.get("values") or {}, str(d.get("revision") or ""))
+                logsetup.saved("パスの設定", app.paths.config / "settings.json", len(lines), time.monotonic() - t0)
                 if lines:
                     log.info("設定を保存しました:\n  %s", "\n  ".join(lines))
                 s = svc.conf()
@@ -412,7 +450,7 @@ def make_handler(app: WebApp):
                 return self._json(200, {"revision": rev})
             if path == "/api/shutdown":
                 if svc.rne.running and not d.get("force"):
-                    raise UserError("データ更新（RNEConverter）の実行中です。終わってから終了してください。")
+                    raise UserError("データ更新の実行中です。終わってから終了してください。")
                 app.request_shutdown("user")
                 return self._json(200, {"stopping": True})
             return self._err(404, "not_found", "not found")
@@ -518,6 +556,9 @@ def serve(paths: Paths, open_browser: bool = True, port: Optional[int] = None,
             pass
         lock.__exit__(None, None, None)
         log.info("画面を終了しました（%s）", app.shutdown_reason or "停止")
+        logsetup.set_stop_reason({"user": "画面の「終了」（stop.bat を含む）", "closed": "画面をすべて閉じた（自動終了）",
+             "idle": "長い時間問い合わせが無い（自動終了）"}.get(
+            app.shutdown_reason, app.shutdown_reason or "停止"))
     return 0
 
 
