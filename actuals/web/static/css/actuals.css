@@ -71,6 +71,24 @@
 .lg__sw--bar.mark-shift-2 { background: var(--shift-2); }
 .lg__sw--bar.mark-shift-3 { background: var(--shift-3); }
 .lg__sw--line.mark-count { color: var(--chart-count); }
+/* 年の集計: グループの 10 色（all-tools の --cat-1〜10。10 色目の淡い灰は「その他」専用） */
+.chart .bar.mark-cat-1 { fill: var(--cat-1); } .chart .bar.mark-cat-2 { fill: var(--cat-2); }
+.chart .bar.mark-cat-3 { fill: var(--cat-3); } .chart .bar.mark-cat-4 { fill: var(--cat-4); }
+.chart .bar.mark-cat-5 { fill: var(--cat-5); } .chart .bar.mark-cat-6 { fill: var(--cat-6); }
+.chart .bar.mark-cat-7 { fill: var(--cat-7); } .chart .bar.mark-cat-8 { fill: var(--cat-8); }
+.chart .bar.mark-cat-9 { fill: var(--cat-9); } .chart .bar.mark-cat-10 { fill: var(--cat-10); }
+.lg__sw--bar.mark-cat-1 { background: var(--cat-1); } .lg__sw--bar.mark-cat-2 { background: var(--cat-2); }
+.lg__sw--bar.mark-cat-3 { background: var(--cat-3); } .lg__sw--bar.mark-cat-4 { background: var(--cat-4); }
+.lg__sw--bar.mark-cat-5 { background: var(--cat-5); } .lg__sw--bar.mark-cat-6 { background: var(--cat-6); }
+.lg__sw--bar.mark-cat-7 { background: var(--cat-7); } .lg__sw--bar.mark-cat-8 { background: var(--cat-8); }
+.lg__sw--bar.mark-cat-9 { background: var(--cat-9); } .lg__sw--bar.mark-cat-10 { background: var(--cat-10); }
+.chart .value { fill: var(--ink); font-size: 11px; font-weight: 700; font-family: var(--mono); }
+.chart .axis--month { font-size: 12px; fill: var(--ink); }
+.chart .axis--year { font-size: 10px; }
+.chart .hit[data-ym] { cursor: pointer; }
+.th-sw { display: inline-flex; align-items: center; gap: 4px; }
+.th-sw .lg__sw { width: 9px; height: 9px; }
+
 /* 表の直の札（グラフと同じ色の淡い地。表で 1 直が青なら、グラフでも青） */
 .shift-chip { display: inline-block; min-width: 1.6em; text-align: center; padding: 0 4px; border-radius: 3px;
               font-weight: 700; border-left: 3px solid; }
@@ -155,7 +173,7 @@ textarea.input { width: 100%; min-height: 120px; font-family: var(--mono); font-
   .view { overflow: visible; padding: 0; }
   .tablewrap { max-height: none !important; overflow: visible; }
   .month-top { grid-template-columns: 0.8fr 2fr; }
-  .chart, .legend, .shift-chip, .chart__title { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .chart, .legend, .shift-chip, .chart__title, .th-sw { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 
 /* パスの設定・「選ぶ…」の窓 */

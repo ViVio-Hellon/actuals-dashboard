@@ -204,7 +204,8 @@ class Service:
         months = [_ym(*_shift_month(fy, 4, k)) for k in range(12)]
         rows, cs = self._rows(cal, months)
         out = A.year_matrix(rows, cs.names(), cal, fy)
-        out.update({"cal": cal, "cal_label": CALENDARS[cal], "prev": fy - 1, "next": fy + 1})
+        out.update({"cal": cal, "cal_label": CALENDARS[cal], "prev": fy - 1, "next": fy + 1,
+                    "charts": charts.year_charts(fy, out["months"], out["groups"])})
         return out
 
     # ---------- ロット 1 件（判定の経過） ----------

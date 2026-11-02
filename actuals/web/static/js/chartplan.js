@@ -30,7 +30,8 @@ export function chartSvg(plan) {
     if (it.t === "line") {
       svg.appendChild(el("line", { x1: it.x1, y1: it.y1, x2: it.x2, y2: it.y2, class: it.cls }));
     } else if (it.t === "rect") {
-      svg.appendChild(tip(el("rect", { x: it.x, y: it.y, width: it.w, height: it.h, class: it.cls }), it.tip));
+      svg.appendChild(tip(el("rect", { x: it.x, y: it.y, width: it.w, height: it.h, class: it.cls,
+                                       "data-ym": it.ym ? it.ym.join("-") : null }), it.tip));
     } else if (it.t === "polyline") {
       svg.appendChild(el("polyline", { points: it.points.map((p) => p.join(",")).join(" "), class: it.cls }));
     } else if (it.t === "dot") {

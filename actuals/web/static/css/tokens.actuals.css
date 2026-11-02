@@ -5,9 +5,13 @@
     直      Excel のグラフと同じ並び 1 直 青・2 直 赤・3 直 緑（表の直の札も同じ色の淡い地）
     枚数の線 累積の線と同じ紫（Paul Tol の purple）。直のどの色とも離れていて、棒の上を横切っても紛れない
     1 色の棒 直の無い時（太陽暦）。Excel の 1 系列目と同じ青
+    グループ 年の集計の積み上げ。all-tools の 10 色（Paul Tol muted の並び。P型/D型色覚でも見分けられる組）を
+            上から順に。10 色目（淡い灰）は「その他」専用
   旧 ｸﾞﾗﾌ シートと同じく「重量は棒、枚数は線」。
 */
 :root{
+  --cat-1:#332288; --cat-2:#88CCEE; --cat-3:#44AA99; --cat-4:#117733; --cat-5:#999933;
+  --cat-6:#DDCC77; --cat-7:#CC6677; --cat-8:#882255; --cat-9:#AA4499; --cat-10:#DDDDDD;
   --chart-total:#4F81BD;
   --shift-1:#4F81BD; --shift-1-bg:#eaf0f8;
   --shift-2:#C0504D; --shift-2-bg:#f9ecec;
@@ -22,6 +26,8 @@
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
+    --cat-1:#6A55D4; --cat-2:#88CCEE; --cat-3:#44AA99; --cat-4:#127B35; --cat-5:#999933;
+    --cat-6:#DDCC77; --cat-7:#CC6677; --cat-8:#BD2F76; --cat-9:#AA4499; --cat-10:#DDDDDD;
     --chart-total:#7BA7DE;
     --shift-1:#7BA7DE; --shift-1-bg:#1b2540;
     --shift-2:#DE7B78; --shift-2-bg:#2a1b1b;
@@ -36,6 +42,8 @@
   }
 }
 :root[data-theme="dark"]{
+  --cat-1:#6A55D4; --cat-2:#88CCEE; --cat-3:#44AA99; --cat-4:#127B35; --cat-5:#999933;
+  --cat-6:#DDCC77; --cat-7:#CC6677; --cat-8:#BD2F76; --cat-9:#AA4499; --cat-10:#DDDDDD;
   --chart-total:#7BA7DE;
   --shift-1:#7BA7DE; --shift-1-bg:#1b2540;
   --shift-2:#DE7B78; --shift-2-bg:#2a1b1b;

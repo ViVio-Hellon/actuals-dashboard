@@ -28,7 +28,7 @@ def nice_max(v: float, ticks: int = 4) -> float:
         return 1.0
     raw = v / ticks
     mag = 10 ** math.floor(math.log10(raw))
-    for m in (1, 2, 2.5, 5, 10):
+    for m in (1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 7.5, 8, 10):     # 細かめに刻み、頭が空きすぎないように
         if raw <= m * mag:
             return m * mag * ticks
     return 10 * mag * ticks
@@ -37,7 +37,7 @@ def nice_max(v: float, ticks: int = 4) -> float:
 def _fmt_kg(v: float) -> str:
     if v >= 1000:
         t = v / 1000
-        return f"{t:g}t"
+        return f"{t:,g}t"
     return f"{v:g}kg"
 
 
@@ -167,3 +167,93 @@ def month_charts(title: str, total_w: Sequence[float], total_c: Sequence[int],
     per = [bar_line(f"{k}直", shift[k]["weight"], shift[k]["count"], days_in_month, note=shift_note, height=170,
                     year=year, month=month, mark=SHIFT_MARKS[k], wmax=wmax, cmax=cmax) for k in (1, 2, 3)]
     return {"total": total, "shift": per}
+
+
+# ======================================================================
+# 年の集計: 月別 × グループの積み上げ棒（all-tools の 10 色 --cat-1〜10）
+# ======================================================================
+CAT_COLORS = 9          # 名前の付いた色の数。10 色目（淡い灰）は「その他」専用（all-tools と同じ決まり）
+OTHER = "cat-10"
+
+
+def group_marks(groups: Sequence[Dict[str, Any]], months: Sequence[Dict[str, Any]]) -> Dict[int, str]:
+    """グループ → 色の印。年度の重量の多い 9 グループに 1〜9 色目を **グループ番号の順に** 付け、残りは「その他」。
+
+    重量・枚数のどちらを見ても同じ色（重量で決める）。実績の無いグループは印を付けない（凡例にも出さない）。
+    """
+    totals = {g["no"]: sum(mo["weight"][i] or 0 for mo in months) for i, g in enumerate(groups)}
+    counts = {g["no"]: sum(mo["count"][i] or 0 for mo in months) for i, g in enumerate(groups)}
+    live = [no for no in totals if totals[no] > 0 or counts[no] > 0]
+    top = sorted(live, key=lambda no: (-totals[no], -counts[no], no))[:CAT_COLORS]
+    marks = {no: f"cat-{k + 1}" for k, no in enumerate(sorted(top))}
+    for no in live:
+        marks.setdefault(no, OTHER)
+    return marks
+
+
+def year_chart(fy: int, months: Sequence[Dict[str, Any]], groups: Sequence[Dict[str, Any]], measure: str,
+               marks: Dict[int, str], height: float = 300.0) -> Dict[str, Any]:
+    """年度の月別の積み上げ棒（下からグループ番号の順。その他は一番上）。measure は weight / count。"""
+    pw, ph = W - LEFT - 20.0, height - TOP - BOTTOM
+    n = len(months) or 12
+    step = pw / n
+    base_y = TOP + ph
+    unit = "kg" if measure == "weight" else "枚"
+    fmt = (lambda v: f"{v:,.1f}") if measure == "weight" else (lambda v: f"{int(v):,}")
+    order = [g for g in groups if g["no"] in marks and marks[g["no"]] != OTHER]
+    others = [g for g in groups if marks.get(g["no"]) == OTHER]
+    idx = {g["no"]: i for i, g in enumerate(groups)}
+
+    def segs(mo):
+        out = [(g["name"], marks[g["no"]], mo[measure][idx[g["no"]]] or 0) for g in order]
+        if others:
+            out.append(("その他", OTHER, sum(mo[measure][idx[g["no"]]] or 0 for g in others)))
+        return out
+
+    tops = [sum(v for _, _, v in segs(mo)) for mo in months]
+    vmax = nice_max(max(tops) if tops else 0)
+    items: List[Dict[str, Any]] = []
+    for k in range(5):
+        y = base_y - ph * k / 4
+        items.append({"t": "line", "x1": LEFT, "y1": y, "x2": LEFT + pw, "y2": y, "cls": "grid"})
+        txt = _fmt_kg(vmax * k / 4) if measure == "weight" else f"{vmax * k / 4:,.0f}枚"
+        items.append({"t": "text", "x": LEFT - 6, "y": y + 4, "anchor": "end", "text": txt, "cls": "axis"})
+    items.append({"t": "text", "x": LEFT - 6, "y": TOP - 14, "anchor": "end",
+                  "text": "重量" if measure == "weight" else "枚数", "cls": "axis axis--head"})
+    bw = step * 0.62
+    for i, mo in enumerate(months):
+        x = LEFT + i * step + (step - bw) / 2
+        acc = 0.0
+        for _, mk, v in segs(mo):
+            if v <= 0:
+                continue
+            y0, y1 = base_y - ph * acc / vmax, base_y - ph * (acc + v) / vmax
+            items.append({"t": "rect", "x": x, "y": y1, "w": bw, "h": y0 - y1, "cls": f"bar bar--seg mark-{mk}"})
+            acc += v
+        if acc > 0:     # 月の合計を棒の上に
+            label = (f"{acc / 1000:,.1f}t" if acc >= 1000 else f"{acc:,.0f}kg") if measure == "weight" else f"{int(acc):,}"
+            items.append({"t": "text", "x": x + bw / 2, "y": base_y - ph * acc / vmax - 5, "anchor": "middle",
+                          "text": label, "cls": "value"})
+        items.append({"t": "text", "x": x + bw / 2, "y": height - 12, "anchor": "middle",
+                      "text": f"{mo['month']}月", "cls": "axis axis--month"})
+        if mo["month"] == 1 or i == 0:
+            items.append({"t": "text", "x": x + bw / 2, "y": height - 0.5, "anchor": "middle",
+                          "text": f"{mo['year']}年", "cls": "axis axis--year"})
+    items.append({"t": "line", "x1": LEFT, "y1": base_y, "x2": LEFT + pw, "y2": base_y, "cls": "base"})
+    for i, mo in enumerate(months):     # 月ごとの当たり（指すと内訳、押すとその月の集計へ）
+        lines = [f"{mo['year']}年{mo['month']}月  計 {fmt(tops[i])} {unit}"]
+        lines += [f"  {name} {fmt(v)} {unit}" for name, _, v in reversed(segs(mo)) if v]
+        items.append({"t": "rect", "x": LEFT + i * step, "y": TOP, "w": step, "h": ph, "cls": "hit",
+                      "tip": "\n".join(lines), "ym": [mo["year"], mo["month"]]})
+    legend = [{"label": g["name"], "mark": marks[g["no"]], "shape": "bar", "no": g["no"]} for g in order]
+    if others:
+        legend.append({"label": f"その他（{'・'.join(g['name'] for g in others)}）", "mark": OTHER, "shape": "bar"})
+    return {"title": f"{fy}年度 月別（グループ別）", "viewBox": [0, 0, W, height], "items": items, "legend": legend,
+            "measure": measure, "total": round(sum(tops), 6)}
+
+
+def year_charts(fy: int, months: Sequence[Dict[str, Any]], groups: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    marks = group_marks(groups, months)
+    return {"marks": {str(k): v for k, v in marks.items()},
+            "weight": year_chart(fy, months, groups, "weight", marks),
+            "count": year_chart(fy, months, groups, "count", marks)}

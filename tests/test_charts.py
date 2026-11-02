@@ -67,5 +67,61 @@ class Charts(unittest.TestCase):
         self.assertEqual([p["legend"][0]["mark"] for p in out["shift"]], ["shift-1", "shift-2", "shift-3"])
 
 
+
+class YearChart(unittest.TestCase):
+    def _months(self, rows):
+        out = []
+        for k in range(12):
+            y, m = (2022, 4 + k) if k < 9 else (2023, k - 8)
+            w = rows.get(k, [0.0] * len(self.groups))
+            out.append({"year": y, "month": m, "weight": w, "count": [int(x) for x in w]})
+        return out
+
+    def setUp(self):
+        self.groups = [{"no": i, "name": f"G{i}"} for i in range(1, 15)]
+
+    def test_top_nine_get_colors_rest_is_other(self):
+        w = [float(100 * i) for i in range(1, 15)]                # G14 が一番多い
+        w[0] = 0.0                                                # G1 は実績なし
+        out = CH.year_charts(2022, self._months({2: w}), self.groups)
+        marks = {int(k): v for k, v in out["marks"].items()}
+        self.assertNotIn(1, marks)                                # 実績の無いグループは凡例にも出さない
+        top = [no for no, m in marks.items() if m != "cat-10"]
+        self.assertEqual(sorted(top), list(range(6, 15)))         # 多い 9 つ
+        self.assertEqual([marks[no] for no in sorted(top)], [f"cat-{k}" for k in range(1, 10)])  # 番号の順に 1〜9 色目
+        self.assertEqual({no for no, m in marks.items() if m == "cat-10"}, {2, 3, 4, 5})
+        leg = out["weight"]["legend"]
+        self.assertEqual(leg[-1]["mark"], "cat-10")
+        self.assertTrue(leg[-1]["label"].startswith("その他（G2・G3・G4・G5"))
+        self.assertEqual([g["mark"] for g in out["count"]["legend"]], [g["mark"] for g in leg])   # 枚数でも同じ色
+
+    def test_bars_add_up_and_click_target(self):
+        w = [0.0] * 14
+        w[0], w[5] = 1200.0, 800.0
+        p = CH.year_charts(2022, self._months({2: w, 9: [5.0] + [0.0] * 13}), self.groups)["weight"]
+        self.assertEqual(p["total"], 2005.0)
+        june = [it for it in p["items"] if it["t"] == "rect" and "bar" in it.get("cls", "")
+                and LEFT_OF(it) == 2]
+        self.assertEqual([it["cls"].split()[-1] for it in june], ["mark-cat-1", "mark-cat-2"])   # 下から番号の順
+        vals = [it["text"] for it in p["items"] if it.get("cls") == "value"]
+        self.assertEqual(vals, ["2.0t", "5kg"])
+        hits = [it for it in p["items"] if it.get("cls") == "hit"]
+        self.assertEqual(len(hits), 12)
+        self.assertEqual(hits[2]["ym"], [2022, 6])
+        self.assertIn("G1 1,200.0 kg", hits[2]["tip"])
+        self.assertEqual(hits[9]["ym"], [2023, 1])
+        months = [it["text"] for it in p["items"] if it["t"] == "text" and "axis--month" in it["cls"]]
+        self.assertEqual(months, ["4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月", "1月", "2月", "3月"])
+
+    def test_empty_year(self):
+        p = CH.year_charts(2030, self._months({}), self.groups)
+        self.assertEqual((p["weight"]["total"], p["weight"]["legend"], p["marks"]), (0, [], {}))
+
+
+def LEFT_OF(it):
+    step = (CH.W - CH.LEFT - 20.0) / 12
+    return int((it["x"] - CH.LEFT) // step)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,7 @@
 */
 import { api, qs } from "../api.js";
 import { toast, toastError } from "../toast.js";
+import { chartSvg, legendHtml } from "../chartplan.js";
 import { $, esc, kg, n0 } from "../util.js";
 
 let mode = "weight";
@@ -22,7 +23,11 @@ export async function render(main, ctx, stale) {
       <td class="n"><b>${fmt(mo[mode + "_total"])}</b></td>${mo[mode].map((x) => `<td class="n${x ? "" : " z"}">${x ? fmt(x) : "0"}</td>`).join("")}</tr>`).join("");
   const dayRows = v.days.map((d) => `<tr><td>${d.date.replaceAll("-", "/")}</td><td class="n"><b>${fmt(d[mode + "_total"])}</b></td>
       ${d[mode].map((x) => `<td class="n${x ? "" : " z"}">${x ? fmt(x) : "0"}</td>`).join("")}</tr>`).join("");
-  const head = `<thead><tr><th>${"日付"}</th><th>${mode === "weight" ? "重量総計" : "枚数総計"}</th>${gs.map((g) => `<th>${esc(g.name)}</th>`).join("")}</tr></thead>`;
+  // 表の見出しにもグラフと同じ色の見本（表とグラフが結び付く）
+  const marks = v.charts.marks;
+  const sw = (g) => marks[g.no] ? `<i class="lg__sw lg__sw--bar mark-${esc(marks[g.no])}"></i>` : "";
+  const head = `<thead><tr><th>${"日付"}</th><th>${mode === "weight" ? "重量総計" : "枚数総計"}</th>${gs.map((g) => `<th><span class="th-sw">${sw(g)}${esc(g.name)}</span></th>`).join("")}</tr></thead>`;
+  const plan = v.charts[mode];
   main.innerHTML = `
   <div class="view">
     <div class="view__head">
@@ -39,6 +44,10 @@ export async function render(main, ctx, stale) {
       <span class="grow"></span>
       <button class="btn btn--sm noprint" type="button" id="csv">年集計を CSV に</button>
     </div>
+    <section class="card" aria-label="月別グラフ"><header><h3>月別（グループ別・${mode === "weight" ? "重量" : "枚数"}）</h3>
+        <span class="legend" aria-label="凡例">${legendHtml(plan.legend)}</span>
+        <span class="note">棒を指すと内訳、押すとその月の集計へ</span></header>
+      <div class="pad"><div class="charts" id="yearChart">${plan.total ? "" : '<p class="empty">この年度の実績はまだありません。</p>'}</div></div></section>
     <section class="card"><header><h3>月別</h3><span class="note">年度の合計 ${kg(v.weight_total)} kg・${n0(v.count_total)} 枚</span></header>
       <div class="pad pad--flush"><div class="tablewrap"><table class="table table--dense matrix">
         ${head.replace("日付", "年月")}<tbody>${monthRows}</tbody></table></div></div></section>
@@ -46,6 +55,17 @@ export async function render(main, ctx, stale) {
       <div class="pad pad--flush"><div class="tablewrap tablewrap--tall"><table class="table table--dense matrix">
         ${head}<tbody>${dayRows}</tbody></table></div></div></section>
   </div>`;
+  if (plan.total) {
+    const svg = chartSvg(plan);
+    $("#yearChart").appendChild(svg);
+    for (const r of svg.querySelectorAll("rect[data-ym]")) {
+      r.addEventListener("click", () => {
+        const [yy, mm] = r.dataset.ym.split("-").map(Number);
+        ctx.setNav({ y: yy, m: mm });
+        location.hash = "#month";
+      });
+    }
+  }
   $("#prev").addEventListener("click", () => { ctx.setNav({ fy: v.fy - 1 }); ctx.refresh(); });
   $("#next").addEventListener("click", () => { ctx.setNav({ fy: v.fy + 1 }); ctx.refresh(); });
   for (const b of main.querySelectorAll("[data-cal]")) b.addEventListener("click", () => { ctx.setNav({ cal: b.dataset.cal }); ctx.refresh(); });
