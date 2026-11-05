@@ -130,6 +130,9 @@ function drawCharts(v) {
   // 凡例: 合計は積んだ段（1〜3 直）+ 枚数、直別は 3 つの直の色 + 枚数（色の意味は画面のどこでも同じ）
   $("#legend").innerHTML = legendHtml(chartMode === "total" ? v.charts.total.legend
     : [...v.charts.shift.map((p) => ({ ...p.legend[0], label: p.title })), { label: "枚数", mark: "count", shape: "line" }]);
+  if (chartMode === "shift") {
+    $("#legend").insertAdjacentHTML("beforeend", '<span class="note">重量の目盛りは 3 直共通・枚数の目盛りは直ごと</span>');
+  }
   for (const p of plans) {
     const t = document.createElement("div");
     t.className = "chart__title";

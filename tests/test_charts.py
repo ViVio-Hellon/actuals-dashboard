@@ -60,6 +60,19 @@ class Charts(unittest.TestCase):
         self.assertEqual(suns, ["5", "12", "19", "26"])                     # 2022/6 の日曜
         self.assertEqual(len([it for it in p["items"] if it.get("cls") == "sun"]), 4)
 
+    def test_count_scale_is_per_shift(self):
+        """枚数の目盛りは直ごと（ほかの直の多い日に引っぱられて線が平らにならない）。"""
+        c1 = [0] * 31
+        c1[0] = 40000
+        c3 = [0] * 31
+        c3[0] = 120
+        sh = _shift(self.w1, self.w2, self.w3)
+        sh[1]["count"], sh[3]["count"] = c1, c3
+        out = CH.month_charts("全", self.total, self.counts, sh, 30, 2022, 6, True)["shift"]
+        tops = [[it["text"] for it in p["items"] if it["t"] == "text" and it["cls"] == "axis axis--count"][-1]
+                for p in out]
+        self.assertEqual(tops, ["40,000枚", "4枚", "120枚"])
+
     def test_shift_charts_share_scale(self):
         out = CH.month_charts("全", self.total, self.counts, _shift(self.w1, self.w2, self.w3), 30, 2022, 6, True)
         heads = [[it["text"] for it in p["items"] if it["t"] == "text" and it["cls"] == "axis"][-1] for p in out["shift"]]

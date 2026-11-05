@@ -72,14 +72,14 @@ def bar_line(title: str, weights: Sequence[float], counts: Sequence[int], days_i
              wmax: Optional[float] = None, cmax: Optional[float] = None) -> Dict[str, Any]:
     """重量の棒 + 枚数の線。stacks = [(名前, 印, 日ごとの重量), …] を渡すと棒を下から積む。
 
-    wmax / cmax を渡すと目盛りの頭をそろえる（直別の 3 枚を同じ物差しで比べるため）。
+    wmax / cmax を渡すと目盛りの頭をそろえる（直別の 3 枚の重量は同じ物差しで比べる。枚数は直ごと）。
     """
     pw, ph = W - LEFT - RIGHT, height - TOP - BOTTOM
     n = 31
     step = pw / n
     base_y = TOP + ph
     wmax = wmax or nice_max(max(weights) if weights else 0)
-    cmax = cmax or nice_max(max(counts) if counts else 0)
+    cmax = cmax or max(4.0, nice_max(max(counts) if counts else 0))     # 枚数は整数。頭は 4 枚以上（目盛りが 0.25 枚にならない）
     use_stacks = list(stacks) if stacks and stacks_match(weights, stacks) else []
     items: List[Dict[str, Any]] = []
 
@@ -163,9 +163,10 @@ def month_charts(title: str, total_w: Sequence[float], total_c: Sequence[int],
     stacks = [(f"{k}直", SHIFT_MARKS[k], shift[k]["weight"]) for k in (1, 2, 3)] if with_shift else None
     total = bar_line(title, total_w, total_c, days_in_month, height=320, year=year, month=month, stacks=stacks)
     wmax = nice_max(max([max(shift[k]["weight"] or [0]) for k in (1, 2, 3)] + [0]))
-    cmax = nice_max(max([max(shift[k]["count"] or [0]) for k in (1, 2, 3)] + [0]))
+    # 枚数の目盛りは直ごと（そろえると、ほかの直の多い日に引っぱられて線が床に貼り付き、読めなくなる）。
+    # 重量の目盛りは 3 枚共通（棒の高さで直どうしを比べる）
     per = [bar_line(f"{k}直", shift[k]["weight"], shift[k]["count"], days_in_month, note=shift_note, height=170,
-                    year=year, month=month, mark=SHIFT_MARKS[k], wmax=wmax, cmax=cmax) for k in (1, 2, 3)]
+                    year=year, month=month, mark=SHIFT_MARKS[k], wmax=wmax) for k in (1, 2, 3)]
     return {"total": total, "shift": per}
 
 
