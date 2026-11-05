@@ -80,16 +80,19 @@ class LocalLock:
             try:
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump({"pid": os.getpid(), "time": datetime.now().isoformat(timespec="seconds")}, f)
+                    json.dump(lock_record(), f)
                 self.acquired = True
                 return self
             except FileExistsError:
                 try:
-                    pid = int(json.loads(self.path.read_text(encoding="utf-8")).get("pid") or 0)
+                    rec = json.loads(self.path.read_text(encoding="utf-8"))
                 except (OSError, ValueError):
-                    pid = 0
-                if pid and _pid_alive(pid):
-                    raise LockHeld(f"pid={pid}")
+                    rec = {}
+                if is_ours(rec):
+                    raise LockHeld(f"pid={rec.get('pid')}")
+                if rec:
+                    log.warning("残っていた web.lock を片付けます（書いたプロセスはもう動いていません。番号 %s は別のプログラム"
+                                "か、終わっています）: %s", rec.get("pid"), rec)
                 try:
                     self.path.unlink()
                 except OSError:
@@ -102,6 +105,90 @@ class LocalLock:
                 self.path.unlink()
             except OSError:
                 pass
+
+
+def _proc_started(pid: int) -> Optional[float]:
+    """プロセスが起動した時刻（エポック秒）。分からなければ None。
+
+    Windows はプロセスの番号を使い回すので、番号だけでは「あの時のツール」か分からない。起動時刻も比べる。
+    """
+    try:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+            k = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            h = k.OpenProcess(0x1000, False, pid)          # PROCESS_QUERY_LIMITED_INFORMATION
+            if not h:
+                return None
+            try:
+                c, e, kt, u = (wintypes.FILETIME() for _ in range(4))
+                if not k.GetProcessTimes(h, ctypes.byref(c), ctypes.byref(e), ctypes.byref(kt), ctypes.byref(u)):
+                    return None
+                ft = (c.dwHighDateTime << 32) | c.dwLowDateTime     # 1601-01-01 からの 100ns
+                return ft / 1e7 - 11644473600.0
+            finally:
+                k.CloseHandle(h)
+        with open(f"/proc/{pid}/stat", encoding="ascii") as f:
+            ticks = int(f.read().rsplit(")", 1)[1].split()[19])
+        with open("/proc/stat", encoding="ascii") as f:
+            btime = next(int(line.split()[1]) for line in f if line.startswith("btime"))
+        return btime + ticks / os.sysconf("SC_CLK_TCK")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def lock_record() -> Dict[str, Any]:
+    """web.lock・server.json に書く: 番号・書いた時刻・**起動時刻**。"""
+    return {"pid": os.getpid(), "time": datetime.now().isoformat(timespec="seconds"),
+            "started": _proc_started(os.getpid())}
+
+
+START_TOLERANCE_SEC = 2.0
+
+
+def is_ours(rec: Dict[str, Any]) -> bool:
+    """記録を書いたツールが、いまも動いているか。番号と起動時刻の両方が合う時だけ True。
+
+    前の版の記録（起動時刻なし）は「書いた時刻より後に起動したプロセスは、書いた本人ではない」で見分ける。
+    起動時刻が取れない時だけ、番号が生きているかで判断する（前と同じ）。
+    """
+    try:
+        pid = int(rec.get("pid") or 0)
+    except (TypeError, ValueError):
+        return False
+    if not pid or not _pid_alive(pid):
+        return False
+    st = _proc_started(pid)
+    if st is None:
+        return True
+    if rec.get("started") is not None:
+        try:
+            return abs(st - float(rec["started"])) <= START_TOLERANCE_SEC
+        except (TypeError, ValueError):
+            return False
+    try:
+        written = datetime.fromisoformat(str(rec.get("time"))).timestamp()
+    except ValueError:
+        return True
+    return st <= written + START_TOLERANCE_SEC
+
+
+def _read_json(p: Path) -> Dict[str, Any]:
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _tidy(paths: Paths, why: str) -> None:
+    """残った web.lock・server.json を片付ける。"""
+    for f in (paths.runtime / "web.lock", paths.runtime / "server.json"):
+        try:
+            f.unlink()
+        except OSError:
+            pass
+    log.warning("片付けました。Start.vbs で起動できます（%s）", why)
 
 
 def _pid_alive(pid: int) -> bool:
@@ -511,17 +598,33 @@ def serve(paths: Paths, open_browser: bool = True, port: Optional[int] = None,
     try:
         lock.__enter__()
     except LockHeld:
+        info = _read_json(info_file)
+        url = info.get("url")
+        held = _read_json(paths.runtime / "web.lock")
+        t0 = time.time()
+        while True:                      # 本当に前回のツールが動いている。5 秒まで応答を待つ
+            if url and _probe(url):
+                log.info("すでに起動しています。開いている画面を表示します: %s", url)
+                if open_browser:
+                    _open_browser(url)
+                return 0
+            if time.time() - t0 >= 5:
+                break
+            time.sleep(0.5)
+        pid = int(held.get("pid") or 0)
+        if is_ours(held):                 # 前回のツール（番号と起動時刻が合う）が応答しない → 終わらせて起動し直す
+            log.warning("前回のツールが 5 秒たっても応答しません。終わらせてから起動し直します（pid %d）", pid)
+            _kill(pid)
+            for _ in range(20):
+                if not _pid_alive(pid):
+                    break
+                time.sleep(0.25)
+        _tidy(paths, f"応答しない前回のツール pid {pid} の後")
         try:
-            url = json.loads(info_file.read_text(encoding="utf-8")).get("url")
-        except (OSError, ValueError):
-            url = None
-        if url and _probe(url):
-            log.info("すでに起動しています。開いている画面を表示します: %s", url)
-            if open_browser:
-                _open_browser(url)
-            return 0
-        notify("倉入実績集計は起動中ですが、画面に接続できません。少し待ってからもう一度起動するか、stop.bat で終了してください。")
-        return 3
+            lock.__enter__()
+        except LockHeld:
+            notify("倉入実績集計は起動中ですが、画面に接続できません。少し待ってからもう一度起動するか、stop.bat で終了してください。")
+            return 3
     app = WebApp(paths)
     sv = app.info.get("server", {})
     first = port if port is not None else int(sv.get("port", 8751))
@@ -542,7 +645,7 @@ def serve(paths: Paths, open_browser: bool = True, port: Optional[int] = None,
     app.httpd = httpd
     app.port = httpd.server_address[1]
     url = f"http://127.0.0.1:{app.port}/"
-    info_file.write_text(json.dumps({"url": url, "pid": os.getpid(), "instance": app.instance}), encoding="utf-8")
+    info_file.write_text(json.dumps({"url": url, "instance": app.instance, **lock_record()}), encoding="utf-8")
     log.info("画面を開始しました: %s (pid=%d, 版 %s)", url, os.getpid(), app.info.get("version"))
     if holder is not None:
         holder["app"], holder["url"] = app, url
@@ -600,23 +703,22 @@ def stop_running(paths: Paths, force_wait: float = 15.0) -> int:
     import re
     info_file = paths.runtime / "server.json"
     lock_file = paths.runtime / "web.lock"
-    try:
-        info = json.loads(info_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        info = {}
-    url, pid = info.get("url", ""), int(info.get("pid") or 0)
-    if not pid:
-        try:
-            pid = int(json.loads(lock_file.read_text(encoding="utf-8")).get("pid") or 0)
-        except (OSError, ValueError):
-            pid = 0
-    if not pid or not _pid_alive(pid):
+    info = _read_json(info_file)
+    held = _read_json(lock_file) or info
+    url, pid = info.get("url", ""), int(held.get("pid") or info.get("pid") or 0)
+    if not is_ours(held if held.get("pid") else info):
+        # 動いていない。番号が残っていても、別のプログラムが同じ番号を使っているだけ（終わらせない）
+        had = lock_file.exists() or info_file.exists()
         for f in (info_file, lock_file):
             try:
                 f.unlink()
             except OSError:
                 pass
-        print("倉入実績集計は動いていません。")
+        if had:
+            log.warning("片付けました。Start.vbs で起動できます（stop.bat: 残っていた web.lock・server.json。pid %s）", pid)
+            print("倉入実績集計は動いていません。残っていたファイルを片付けました。Start.vbs で起動できます。")
+        else:
+            print("倉入実績集計は動いていません。")
         return 0
     asked = False
     if url and _probe(url):
@@ -653,5 +755,6 @@ def stop_running(paths: Paths, force_wait: float = 15.0) -> int:
             f.unlink()
         except OSError:
             pass
-    print("終了しました（強制終了）。")
+    log.warning("片付けました。Start.vbs で起動できます（stop.bat: 強制終了 pid %d）", pid)
+    print("終了しました（強制終了）。片付けました。Start.vbs で起動できます。")
     return 0

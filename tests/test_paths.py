@@ -142,6 +142,85 @@ class Stop(unittest.TestCase):
             if proc.poll() is None:
                 proc.kill()
 
+    # ---- 番号の使い回し（PC を終了・再起動した後に、別のプログラムが同じ番号を持つ） ----
+    def _other(self):
+        """ツールとは関係のない、いま動いているプログラム。"""
+        return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+    def test_is_ours_needs_pid_and_start_time(self):
+        me = server.lock_record()
+        self.assertTrue(server.is_ours(me))
+        other = self._other()
+        try:
+            time.sleep(0.2)
+            st = server._proc_started(other.pid)
+            self.assertIsNotNone(st)
+            self.assertTrue(server.is_ours({"pid": other.pid, "started": st}))
+            self.assertFalse(server.is_ours({"pid": other.pid, "started": st - 3600}))      # 番号は同じでも別物
+            old = "2020-01-01T00:00:00"                                                   # 前の版の記録（起動時刻なし）
+            self.assertFalse(server.is_ours({"pid": other.pid, "time": old}))             # 書いた後に起動 → 本人ではない
+            self.assertTrue(server.is_ours({"pid": other.pid, "time": "2999-01-01T00:00:00"}))
+        finally:
+            other.kill()
+            other.wait()
+        self.assertFalse(server.is_ours({"pid": 999999, "started": 0}))
+
+    def test_reused_pid_lock_is_tidied_and_lock_taken(self):
+        other = self._other()
+        try:
+            (self.paths.runtime / "web.lock").write_text(json.dumps({"pid": other.pid, "time": "2020-01-01T00:00:00"}))
+            lock = server.LocalLock(self.paths.runtime / "web.lock")
+            lock.__enter__()
+            self.assertEqual(json.loads((self.paths.runtime / "web.lock").read_text())["pid"], os.getpid())
+            lock.__exit__(None, None, None)
+            self.assertIsNone(other.poll())                                               # 関係のないプログラムは終わらせない
+        finally:
+            other.kill()
+            other.wait()
+
+    def test_stop_does_not_kill_reused_pid(self):
+        other = self._other()
+        try:
+            time.sleep(0.2)
+            rec = {"pid": other.pid, "started": server._proc_started(other.pid) - 3600}
+            (self.paths.runtime / "web.lock").write_text(json.dumps(rec))
+            (self.paths.runtime / "server.json").write_text(json.dumps({"url": "http://127.0.0.1:1/", **rec}))
+            self.assertEqual(server.stop_running(self.paths, force_wait=1), 0)
+            time.sleep(0.3)
+            self.assertIsNone(other.poll())                                               # 終わらせていない
+            self.assertFalse((self.paths.runtime / "web.lock").exists())                  # 片付けた
+            self.assertFalse((self.paths.runtime / "server.json").exists())
+        finally:
+            other.kill()
+            other.wait()
+
+    def test_start_after_reboot_with_reused_pid(self):
+        """前の版の web.lock が残り、その番号を別のプログラムが使っていても、普通に起動できる。"""
+        other = self._other()
+        env = dict(os.environ, ACTUALS_DASHBOARD_HOME=str(self.paths.base))
+        try:
+            (self.paths.runtime / "web.lock").write_text(json.dumps({"pid": other.pid, "time": "2020-01-01T00:00:00"}))
+            (self.paths.runtime / "server.json").write_text(json.dumps({"url": "http://127.0.0.1:1/", "pid": other.pid}))
+            proc = subprocess.Popen([sys.executable, str(ROOT / "start_app.py"), "--no-browser", "--port", "0"], env=env,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                for _ in range(100):
+                    if json.loads((self.paths.runtime / "server.json").read_text() or "{}").get("pid") == proc.pid:
+                        break
+                    time.sleep(0.1)
+                info = json.loads((self.paths.runtime / "server.json").read_text())
+                self.assertEqual(info["pid"], proc.pid)
+                self.assertIsNotNone(info.get("started"))
+                self.assertEqual(server.stop_running(self.paths), 0)
+                proc.wait(10)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+            self.assertIsNone(other.poll())
+        finally:
+            other.kill()
+            other.wait()
+
     def test_hung_process_is_killed(self):
         """画面が応答しない（固まった）時は、記録の pid を強制終了してロックを片付ける。"""
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
