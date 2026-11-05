@@ -102,6 +102,11 @@ Python（標準ライブラリだけ）
 | 条件表・手動訂正・変更履歴 | 共有 `actuals_master.sqlite3` | 全 PC 共通。版番号・画面が見ていた値と比べ、別の人の保存を上書きしない（409） |
 | 設定・ログ・写し・SymNavi のログイン | `%USERPROFILE%\ActualsDashboard`（`ACTUALS_DASHBOARD_HOME` で変更可） | PC ごと |
 
+**共有フォルダを後から決めた時:** それまで ② が空欄で、この PC の中（`%USERPROFILE%\ActualsDashboard\shared`）に貯めた分は、
+「データ」画面の「この PC に貯めた分を共有フォルダへ移す」で移せます（② を保存した時にも知らせます）。
+共有にある物は上書きしません（同じロットの実績・同じロットの手動訂正は共有のまま。条件表は共有がまだ初期値の時だけ写す）。
+移した後、この PC の物は `…_移した_<日時>.sqlite3` の名前で残します（消さない）。取り込みの記録には「この PC から移した」と残ります。
+
 共有の SQLite には複数の PC が直接書きません（SMB 上ではロックが正しく効かないことがあるため）。
 保存のたびに「ロックファイルで 1 台ずつ → 手元で直す → 一時ファイルを置いて os.replace で差し替え」、
 読む時は「変わっていれば手元に写して読み取り専用で読む」です。共有に届かない時は手元の最後の控えを表示し、帯で知らせます。
@@ -157,7 +162,7 @@ all-tools（日報複合ツール）と同じ決まりです。
 ## 試験と照合
 
 ```
-python -m unittest discover -s tests -t .              # 95 件（正解データ照合・境界値・同時保存・画面 API・旧ブック読込・パス設定・データ更新・停止・ログ）
+python -m unittest discover -s tests -t .              # 100 件（正解データ照合・境界値・同時保存・画面 API・旧ブック読込・パス設定・データ更新・停止・ログ）
 python tools/compare_with_vba.py 旧ツールで集計したブック.xlsm   # 並行運用中の突き合わせ
 python tools/make_golden.py 受領ブック.xlsm tests/fixtures/golden_YYYYMM.json   # 正解データを作る
 ```

@@ -207,3 +207,6 @@ textarea.input { width: 100%; min-height: 120px; font-family: var(--mono); font-
 .paths__no { display: inline-block; min-width: 2.6em; font-family: var(--mono); color: var(--accent); }
 .paths__derived th, .paths__derived td { background: var(--sunken); }
 .paths__derived td.mono { font-size: var(--fs-sm); word-break: break-all; }
+
+/* 知らせたいカード（この PC に貯めた分など） */
+.card--warn { border-left: 4px solid var(--state-warn, var(--warn-fg)); }

@@ -1,9 +1,12 @@
 """画面から呼ぶ処理（ビューモデルを組み立てる）。業務の判断はすべてここから下で行い、画面は描くだけ。"""
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 import time
+from contextlib import closing
 from collections import OrderedDict
 from datetime import date, datetime
 from pathlib import Path
@@ -67,7 +70,10 @@ class Service:
         if key == self._stores_key:
             return
         kw = {"lock_wait": float(s.get("lock_wait_sec") or 10)}
-        cache = self.paths.cache / "shared"
+        # 写しは置き場所ごとに分ける（② を変えた直後に、前の置き場所の写しを読まない）
+        import hashlib
+        cache = self.paths.cache / "shared" / hashlib.sha1(
+            str(Path(s["shared_dir"]).resolve()).lower().encode("utf-8")).hexdigest()[:12]
         self.master = MasterStore(Path(s["shared_dir"]), cache, **kw)
         self.history = HistoryStore(Path(s["shared_dir"]), cache, **kw)
         self._stores_key = key
@@ -376,7 +382,89 @@ class Service:
         return res
 
     def history_summary(self) -> Dict[str, Any]:
-        return self.history.summary()
+        self.conf()                            # ② を変えた直後でも、いまの置き場所を読む
+        return {**self.history.summary(), "leftover": self.local_leftover()}
+
+    # ---------- 共有フォルダを決める前に、この PC に貯めた分 ----------
+    def _local_dir(self) -> Path:
+        return self.paths.base / "shared"      # ② が空欄の時の置き場所（settings.resolved と同じ）
+
+    def _read_local(self) -> Optional[Dict[str, Any]]:
+        """この PC の中の蓄積・手動訂正・条件表を読む（読むだけ）。共有フォルダを決めていない時・何も無い時は None。"""
+        import sqlite3
+        s = self.conf()
+        local = self._local_dir()
+        if not s["shared_configured"] or Path(s["shared_dir"]).resolve() == local.resolve():
+            return None
+        hist, mast = local / "actuals_history.sqlite3", local / "actuals_master.sqlite3"
+        out: Dict[str, Any] = {"dir": str(local), "lots": [], "columns": [], "overrides": [], "conditions": None}
+
+        def ro(p: Path):
+            c = sqlite3.connect(f"file:{p.as_posix()}?mode=ro", uri=True, timeout=5)
+            c.row_factory = sqlite3.Row
+            return c
+        try:
+            if hist.is_file():
+                with closing(ro(hist)) as c:
+                    out["lots"] = [dict(r) for r in c.execute(
+                        "SELECT lot, data, genba_ym, taiyo_ym, updated_at FROM lots ORDER BY import_id, pos")]
+                    out["columns"] = [r[0] for r in c.execute("SELECT name FROM columns ORDER BY pos")]
+            if mast.is_file():
+                with closing(ro(mast)) as c:
+                    out["overrides"] = [dict(r) for r in c.execute("SELECT * FROM overrides ORDER BY at")]
+                    row = c.execute("SELECT data FROM conditions WHERE id = 1").fetchone()
+                    if row:
+                        cs = ConditionSet.from_dict(json.loads(row[0]))
+                        if not str(cs.updated_by).startswith("初期値"):   # この PC で保存した条件表だけ
+                            out["conditions"] = cs
+        except sqlite3.Error as e:
+            log.warning("この PC の中の蓄積を読めません（移せません）: %s（%s）", local, e)
+            return None
+        if not (out["lots"] or out["overrides"] or out["conditions"]):
+            return None
+        return out
+
+    def local_leftover(self) -> Optional[Dict[str, Any]]:
+        """画面に出す: この PC に貯めた分の件数・年月（共有へ移せるもの）。"""
+        d = self._read_local()
+        if d is None:
+            return None
+        months = sorted({m for r in d["lots"] for m in (r["genba_ym"],) if m})
+        shared = set()
+        with self.history.file.read() as conn:
+            if conn is not None and d["lots"]:
+                shared = {r[0] for r in conn.execute("SELECT lot FROM lots")}
+        new = sum(1 for r in d["lots"] if r["lot"] not in shared)
+        return {"dir": d["dir"], "lots": len(d["lots"]), "new_lots": new, "months": months,
+                "overrides": len(d["overrides"]), "conditions": d["conditions"] is not None,
+                "conditions_by": d["conditions"].updated_by if d["conditions"] else ""}
+
+    def move_local_to_shared(self) -> Dict[str, Any]:
+        """この PC に貯めた分を共有フォルダへ移す。共有にある物は上書きしない。移したらこの PC の物は名前を変えて残す。"""
+        d = self._read_local()
+        if d is None:
+            raise UserError("移すものがありません（共有フォルダが未設定か、この PC の中に貯めた分がありません）。")
+        note = f"この PC（{who()['pc']}）に貯めた分を移した"
+        with self._import_mu:
+            res: Dict[str, Any] = {"lots": {"rows": 0, "added": 0, "kept": 0, "months": []}}
+            if d["lots"]:
+                res["lots"] = self.history.absorb(d["lots"], d["columns"], d["dir"])
+            res.update(self.master.absorb(d["overrides"], d["conditions"], note))
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        kept = []
+        for name in ("actuals_history.sqlite3", "actuals_master.sqlite3"):
+            p = Path(d["dir"]) / name
+            if p.is_file():
+                dst = p.with_name(f"{p.stem}_移した_{stamp}{p.suffix}")
+                try:
+                    os.replace(p, dst)
+                    kept.append(str(dst))
+                except OSError as e:
+                    log.warning("移した後に名前を変えられません（次回もう一度出ますが、二重には入りません）: %s（%s）", p, e)
+        res["kept_as"] = kept
+        self._cache.clear()
+        log.info("この PC に貯めた分を共有へ移しました: %s", res)
+        return res
 
     # ---------- データ更新（SymNavi） ----------
     def run_update(self) -> Dict[str, Any]:

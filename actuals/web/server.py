@@ -45,6 +45,7 @@ OPERATIONS = {
     "/api/import/paste": ("取り込み（貼り付け）", ()),
     "/api/import/xls": ("取り込み（xls）", ()),
     "/api/import/workbook": ("旧ブックからの移行", ("path", "with_conditions")),
+    "/api/local/move": ("この PC に貯めた分を共有フォルダへ移す", ()),
     "/api/credentials": ("SymNavi のログインの登録", ("id",)),
     "/api/override": ("手動訂正", ("lot", "grp", "reason")),
     "/api/conditions": ("条件表の保存", ("rev", "note")),
@@ -401,6 +402,8 @@ def make_handler(app: WebApp):
                 if path == "/api/import/paste":
                     detail["lines"] = str(d.get("text") or "").count("\n")
                 logsetup.operation(label, **detail)
+            if path == "/api/local/move":
+                return self._json(200, svc.move_local_to_shared())
             if path == "/api/import/sqlite":
                 return self._json(200, svc.import_sqlite(str(d.get("path") or "")))
             if path == "/api/import/paste":
@@ -454,7 +457,12 @@ def make_handler(app: WebApp):
                     log.info("設定を保存しました:\n  %s", "\n  ".join(lines))
                 s = svc.conf()
                 logsetup.setup(s["log_dir"], app.paths.logs, keep_days=int(s.get("log_keep_days") or 90))
-                return self._json(200, {"revision": rev})
+                try:
+                    leftover = svc.local_leftover()
+                except Exception:  # noqa: BLE001  知らせるだけ。保存は済んでいる
+                    log.warning("この PC に貯めた分を確かめられません", exc_info=True)
+                    leftover = None
+                return self._json(200, {"revision": rev, "leftover": leftover})
             if path == "/api/shutdown":
                 if svc.rne.running and not d.get("force"):
                     raise UserError("データ更新の実行中です。終わってから終了してください。")

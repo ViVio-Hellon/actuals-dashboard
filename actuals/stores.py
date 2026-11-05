@@ -50,6 +50,14 @@ def _master_schema(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO conditions (id, data) VALUES (1, ?)", (_dumps(cs.to_dict()),))
 
 
+def _body(cs: ConditionSet) -> Dict[str, Any]:
+    """条件表の中身だけ（版番号・保存した人と日時を除く）。"""
+    d = dict(cs.to_dict())
+    for k in ("rev", "updated_at", "updated_by"):
+        d.pop(k, None)
+    return d
+
+
 def _audit(conn: sqlite3.Connection, kind: str, target: str, before: Any, after: Any, note: str = "") -> None:
     w = who()
     conn.execute("INSERT INTO audit (at, by_user, by_pc, kind, target, before, after, note) VALUES (?,?,?,?,?,?,?,?)",
@@ -88,6 +96,41 @@ class MasterStore:
             self.file.write(lambda conn: None, what="条件表の初期値", count=0)
 
     # ----- 書く -----
+    def absorb(self, overrides: Sequence[Dict[str, Any]], conditions: Optional[ConditionSet], note: str) -> Dict[str, Any]:
+        """この PC に貯めた手動訂正・条件表を共有へ移す。**共有にある物は上書きしない。**
+
+        手動訂正: 共有に無いロットだけ足す（理由・PC・利用者・日時はそのまま）。
+        条件表: 共有の条件表がまだ初期値のまま（だれも保存していない）時だけ、この PC の条件表を写す。
+        """
+        def mutate(conn):
+            added = kept = 0
+            for o in overrides:
+                if conn.execute("SELECT 1 FROM overrides WHERE lot = ?", (o["lot"],)).fetchone():
+                    kept += 1
+                    continue
+                rec = {k: o.get(k) for k in ("lot", "grp", "reason", "by_user", "by_pc", "at")}
+                conn.execute("INSERT INTO overrides (lot, grp, reason, by_user, by_pc, at) "
+                             "VALUES (:lot, :grp, :reason, :by_user, :by_pc, :at)", rec)
+                _audit(conn, "override", o["lot"], None, rec, note)
+                added += 1
+            cond = "none"
+            if conditions is not None:
+                cur = ConditionSet.from_dict(json.loads(conn.execute("SELECT data FROM conditions WHERE id=1").fetchone()[0]))
+                if _body(cur) == _body(conditions):
+                    cond = "same"
+                elif str(cur.updated_by).startswith("初期値"):
+                    w = who()
+                    new = ConditionSet.from_dict(conditions.to_dict())
+                    new.rev, new.updated_at = cur.rev + 1, now_text()
+                    new.updated_by = f"{w['pc']} {w['user']}（{note}）".strip()
+                    conn.execute("UPDATE conditions SET data = ? WHERE id = 1", (_dumps(new.to_dict()),))
+                    _audit(conn, "conditions", f"rev {new.rev}", cur.to_dict(), new.to_dict(), note)
+                    cond = "copied"
+                else:
+                    cond = "kept"
+            return {"overrides_added": added, "overrides_kept": kept, "conditions": cond}
+        return self.file.write(mutate, what="この PC の手動訂正・条件表を共有へ", count=lambda r: r["overrides_added"])
+
     def save_conditions(self, cs: ConditionSet, base_rev: int, note: str = "") -> ConditionSet:
         problems = validate(cs)
         if problems:
@@ -245,6 +288,32 @@ class HistoryStore:
             return {"import_id": imp, "rows": len(clean), "added": added, "changed": changed, "same": same,
                     "duplicates": dups, "months": sorted(months)}
         return self.file.write(mutate, what="蓄積した実績", count=lambda r: r["rows"])
+
+    def absorb(self, lots: Sequence[Dict[str, Any]], columns: Sequence[str], source: str) -> Dict[str, Any]:
+        """この PC に貯めた実績を共有へ移す。**共有にあるロットは共有のまま**（上書きしない）。並びはこの PC の順。"""
+        def mutate(conn):
+            w = who()
+            cur = conn.execute("INSERT INTO imports (at, by_user, by_pc, kind, source, rows, note) VALUES (?,?,?,?,?,?,?)",
+                               (now_text(), w["user"], w["pc"], "move", source, len(lots),
+                                "共有フォルダを決める前にこの PC に貯めた分"))
+            imp = cur.lastrowid
+            for i, name in enumerate(columns):
+                conn.execute("INSERT OR IGNORE INTO columns (name, pos) VALUES (?, ?)", (name, i))
+            added = kept = 0
+            months = set()
+            for pos, r in enumerate(lots):
+                if conn.execute("SELECT 1 FROM lots WHERE lot = ?", (r["lot"],)).fetchone():
+                    kept += 1
+                    continue
+                conn.execute("INSERT INTO lots (lot, data, genba_ym, taiyo_ym, import_id, pos, first_import, updated_at) "
+                             "VALUES (?,?,?,?,?,?,?,?)", (r["lot"], r["data"], r["genba_ym"], r["taiyo_ym"], imp, pos,
+                                                         imp, r.get("updated_at") or now_text()))
+                months.update(x for x in (r["genba_ym"], r["taiyo_ym"]) if x)
+                added += 1
+            conn.execute("UPDATE imports SET added=?, changed=0, same=?, months=? WHERE id=?",
+                         (added, kept, ",".join(sorted(months)), imp))
+            return {"rows": len(lots), "added": added, "kept": kept, "months": sorted(months)}
+        return self.file.write(mutate, what="この PC の実績を共有へ", count=lambda r: r["added"])
 
     # ----- 読む -----
     def lots_in_months(self, cal: str, months: Sequence[str]) -> List[Dict[str, Any]]:

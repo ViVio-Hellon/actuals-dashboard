@@ -157,9 +157,13 @@ export async function render(main, ctx, stale) {
   });
   $("#save").addEventListener("click", async () => {
     try {
-      await api.post("/api/settings", { values: collect(), revision: v.revision }, "保存しています…");
+      const r = await api.post("/api/settings", { values: collect(), revision: v.revision }, "保存しています…");
       ctx.dirty = false;
       toast("設定を保存しました。", "ok");
+      if (r.leftover) {
+        toast(`共有フォルダを決める前に、この PC に貯めた実績 ${r.leftover.lots} ロット・手動訂正 ${r.leftover.overrides} 件があります。「データ」画面で共有フォルダへ移せます。`,
+              "warn", { label: "データ画面へ", onClick: () => { location.hash = "#data"; } });
+      }
       await ctx.reloadState();
       ctx.refresh();
     } catch (e) { toastError(e); if (e.status === 409) { ctx.dirty = false; ctx.refresh(); } }

@@ -20,13 +20,25 @@ export async function render(main, ctx, stale) {
   const [h, st] = await Promise.all([api.get("/api/history", "読み込んでいます…"), api.get("/api/state")]);
   if (stale()) return;
   const rne = st.rne;
-  const kinds = { symnavi: "データ更新（SymNavi）", sqlite: "SQLite", source: "RNEConverter", paste: "貼付け", xls: "xls", xlsm: "旧ブック" };
+  const kinds = { symnavi: "データ更新（SymNavi）", sqlite: "SQLite", source: "RNEConverter", paste: "貼付け", xls: "xls", xlsm: "旧ブック", move: "この PC から移した" };
   const runState = rne.running ? `<span class="st-dot warn">実行中 ${rne.progress}%（${rne.elapsed} 秒）</span>`
     : rne.ok === true ? `<span class="st-dot ok">前回は成功（${esc(rne.step)}）</span>`
     : rne.ok === false ? `<span class="st-dot ng">前回は失敗: ${esc(rne.message)}</span>` : '<span class="muted">まだ実行していません</span>';
   main.innerHTML = `
   <div class="view">
     <div class="view__head"><h2>データ</h2><span class="note">蓄積しているロット ${n0(h.lots)} 件</span></div>
+    ${h.leftover ? `
+    <section class="card card--warn" aria-label="この PC に貯めた分"><header><h3>この PC に貯めた分を共有フォルダへ移す</h3></header><div class="pad stack">
+      <p>共有フォルダを決める前に、この PC の中（${esc(h.leftover.dir)}）に貯めた分があります。共有フォルダへ移すと、ほかの PC でも見えます。</p>
+      <dl class="facts">
+        <dt>実績</dt><dd>${n0(h.leftover.lots)} ロット（うち共有に無いもの ${n0(h.leftover.new_lots)}）${h.leftover.months.length ? `・${esc(h.leftover.months[0])}〜${esc(h.leftover.months[h.leftover.months.length - 1])}` : ""}</dd>
+        <dt>手動訂正</dt><dd>${n0(h.leftover.overrides)} 件</dd>
+        <dt>条件表</dt><dd>${h.leftover.conditions ? `この PC で保存した条件表あり（${esc(h.leftover.conditions_by)}）` : "この PC では変えていない"}</dd>
+      </dl>
+      <p class="note">共有にある物は上書きしません（同じロット・同じロットの手動訂正は共有のまま。条件表は共有がまだ初期値の時だけ写します）。
+        移した後、この PC の中の物は「…_移した_日時」の名前で残します（消しません）。</p>
+      <div class="btn-row"><button class="btn btn--run" type="button" id="moveLocal">共有フォルダへ移す</button></div>
+    </div></section>` : ""}
     <div class="month-top">
       <section class="card"><header><h3>データ更新（SymNavi から取り出す）</h3></header><div class="pad stack">
         <dl class="facts">
@@ -83,6 +95,20 @@ export async function render(main, ctx, stale) {
     if (!path) { toast("ファイルの場所を入れてください。", "warn"); return; }
     try { await after(await api.post("/api/import/sqlite", { path }, "取り込んでいます…")); } catch (e) { toastError(e); }
   });
+  if (h.leftover) {
+    $("#moveLocal").addEventListener("click", async () => {
+      const ok = await confirmBox(`この PC に貯めた実績 ${n0(h.leftover.lots)} ロット・手動訂正 ${n0(h.leftover.overrides)} 件を、共有フォルダへ移します。共有にある物は上書きしません。よろしいですか？`,
+                                  { ok: "移す" });
+      if (!ok) return;
+      try {
+        const r = await api.post("/api/local/move", {}, "移しています…");
+        const cond = { copied: "条件表も写しました", kept: "条件表は共有のまま（共有で保存済みのため）", same: "条件表は同じでした", none: "" }[r.conditions] || "";
+        toast(`移しました: 実績 追加 ${n0(r.lots.added)}・共有のまま ${n0(r.lots.kept)}、手動訂正 追加 ${n0(r.overrides_added)}・共有のまま ${n0(r.overrides_kept)}${cond ? `。${cond}` : ""}`, "ok");
+        await ctx.reloadState();
+        ctx.refresh();
+      } catch (e) { toastError(e); }
+    });
+  }
   $("#rerun").addEventListener("click", () => document.getElementById("rneRun").click());
   $("#xlsGo").addEventListener("click", async () => {
     const f = $("#xlsFile").files[0];
