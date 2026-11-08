@@ -37,7 +37,22 @@ function ensure() {
  * @param {{kind:"dir"|"file", ext?:string, start?:string, title?:string}} opt
  * @returns {Promise<string|null>} 選んだフルパス。やめたら null
  */
+/** デスクトップ版（Tauri の窓の中）か。 */
+export function isDesktop() {
+  return Boolean(window.__TAURI__ && window.__TAURI__.core);
+}
+
 export function pick(opt) {
+  // デスクトップ版は Windows の「フォルダーの選択」「ファイルを開く」の窓を使う（外枠 src-tauri の pick_path）
+  if (isDesktop()) {
+    return window.__TAURI__.core.invoke("pick_path", {
+      kind: opt.kind === "dir" ? "dir" : "file", ext: opt.ext || "", start: opt.start || "", title: opt.title || "",
+    }).then((p) => p || null).catch(() => pickInPage(opt));
+  }
+  return pickInPage(opt);
+}
+
+function pickInPage(opt) {
   const d = ensure();
   const st = { path: "", parent: null };
   const $ = (s) => d.querySelector(s);

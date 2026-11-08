@@ -1,0 +1,61 @@
+# デスクトップ版（Windows）を作って確かめる（python-web-tools と同じ流れ）
+#
+# 作るもの: 倉入実績集計.exe（成果物 "ActualsDashboard-windows" から取れる）。
+# 配るときは、ツールのフォルダ（start_app.py・bridge.py のある所）の直下に置く。
+#
+# 確かめること:
+#   - Python の試験（Windows の上で。標準入出力のやりとり・番号と起動時刻の判定は OS で違いが出やすい）
+#   - Rust の試験
+#   - 作った exe を本当に起動し、画面が Python から届くこと・ポートで待ち受けないこと・
+#     2 回目の起動とブラウザ版が止まること・stop.bat で止まること・止めたら Python も終わること
+name: デスクトップ版（Windows）
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      # 各ラインPCと同じく、標準ライブラリだけ（pip で何も入れない）
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Python の試験
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -m unittest discover -s tests -t .
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Rust の試験
+        working-directory: src-tauri
+        run: cargo test --release
+
+      - name: exe を作る
+        working-directory: src-tauri
+        run: cargo build --release
+
+      - name: 作った exe を起動して確かめる
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python scripts/desktop_smoke.py --exe src-tauri/target/release/ActualsDashboard.exe
+
+      - name: 配る名前にする
+        shell: pwsh
+        run: Copy-Item src-tauri/target/release/ActualsDashboard.exe "倉入実績集計.exe"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ActualsDashboard-windows
+          path: 倉入実績集計.exe
+          if-no-files-found: error

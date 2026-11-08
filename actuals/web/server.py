@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -32,6 +33,9 @@ from ..source import SourceError
 from ..stores import Conflict, ImportError_
 
 log = logging.getLogger("actuals.web")
+
+# デスクトップ版の画面の宛先（外枠 src-tauri の SCHEME と同じ。Windows の WebView2 は http://app.localhost）
+DESKTOP_HOSTS = ("app.localhost", "localhost")
 
 # 業務上ありうる断り（ERROR ではなく WARNING「中断」として残す）
 logsetup.expected_errors(UserError, Conflict, SharedBusy, SharedUnreachable, SourceError, ImportError_,
@@ -70,8 +74,9 @@ class LockHeld(RuntimeError):
 class LocalLock:
     """この PC で 1 つだけ（RNEConverter の locking.LocalLock と同じ。死んだプロセスのロックは回収）。"""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, mode: str = "browser"):
         self.path = path
+        self.mode = mode
         self.acquired = False
 
     def __enter__(self):
@@ -80,7 +85,7 @@ class LocalLock:
             try:
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(lock_record(), f)
+                    json.dump(lock_record(self.mode), f)
                 self.acquired = True
                 return self
             except FileExistsError:
@@ -137,10 +142,31 @@ def _proc_started(pid: int) -> Optional[float]:
         return None
 
 
-def lock_record() -> Dict[str, Any]:
-    """web.lock・server.json に書く: 番号・書いた時刻・**起動時刻**。"""
-    return {"pid": os.getpid(), "time": datetime.now().isoformat(timespec="seconds"),
-            "started": _proc_started(os.getpid())}
+MODE_LABEL = {"browser": "ブラウザ版", "desktop": "デスクトップ版"}
+
+
+def lock_record(mode: str = "browser") -> Dict[str, Any]:
+    """web.lock・server.json に書く: どちらの版か・番号・書いた時刻・**起動時刻**。
+
+    ブラウザ版とデスクトップ版は同じ web.lock を取り合う（同時に動かさない。後から開いた方が止まる）。
+    デスクトップ版は窓（exe）の番号も書く（stop.bat が窓に「閉じて」と頼む相手）。
+    """
+    rec = {"mode": mode, "pid": os.getpid(), "time": datetime.now().isoformat(timespec="seconds"),
+           "started": _proc_started(os.getpid())}
+    if mode == "desktop":
+        try:
+            rec["exe_pid"] = int(os.environ.get("ACTUALS_EXE_PID") or 0) or None
+        except ValueError:
+            rec["exe_pid"] = None
+    return rec
+
+
+def other_running(paths: Paths, me: str) -> Optional[Dict[str, Any]]:
+    """もう一方の版（me でない方）が動いていれば、その記録。"""
+    rec = _read_json(paths.runtime / "web.lock")
+    if rec and rec.get("mode", "browser") != me and is_ours(rec):
+        return rec
+    return None
 
 
 START_TOLERANCE_SEC = 2.0
@@ -231,6 +257,7 @@ class WebApp:
         self.closed_at: Optional[float] = None
         self._last_tick: Optional[float] = None
         self.shutdown_reason = ""
+        self.bridge = None                 # デスクトップ版: 外枠（exe）へ知らせる口（bridge.py が付ける）
 
     def seen(self, tab: str) -> None:
         now = time.time()
@@ -278,6 +305,8 @@ class WebApp:
                 self.service.rne.cancel()   # SymNavi・Excel を残さない
             if self.httpd:
                 self.httpd.shutdown()
+            if self.bridge is not None:     # デスクトップ版: 外枠に「終わってよい」を知らせる（窓が閉じる）
+                self.bridge("quit")
         threading.Thread(target=_stop, daemon=True).start()
 
 
@@ -308,7 +337,10 @@ def make_handler(app: WebApp):
             log.debug("http %s", fmt % args)
 
         def _host_ok(self) -> bool:
-            return (self.headers.get("Host") or "").lower() in (f"127.0.0.1:{app.port}", f"localhost:{app.port}")
+            host = (self.headers.get("Host") or "").lower()
+            if app.bridge is not None:      # デスクトップ版: 外枠（exe）の中の宛先だけ（ネットワークを通らない）
+                return host in DESKTOP_HOSTS
+            return host in (f"127.0.0.1:{app.port}", f"localhost:{app.port}")
 
         def _send(self, code: int, body: bytes, ctype: str, extra: Optional[Dict[str, str]] = None) -> None:
             self.send_response(code)
@@ -405,12 +437,15 @@ def make_handler(app: WebApp):
                 return self._send(404, b"not found", "text/plain; charset=utf-8")
             body = target.read_bytes()
             if target.name == "index.html":
+                log.info("画面を開きました（%s）", "デスクトップ版" if app.bridge is not None else "ブラウザ版")
                 body = (body.decode("utf-8").replace("{{TOKEN}}", app.token).replace("{{INSTANCE}}", app.instance)
                         .replace("{{VERSION}}", str(app.info.get("version")))
                         .replace("{{NAME}}", str(app.info.get("display_name")))).encode("utf-8")
             self._send(200, body, CONTENT_TYPES.get(target.suffix, "application/octet-stream"),
                        {"Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; "
-                                                   "script-src 'self'; img-src 'self' data:; connect-src 'self'; "
+                                                   "script-src 'self'; img-src 'self' data:; connect-src 'self'"
+                                                   + (" ipc: http://ipc.localhost" if app.bridge is not None else "")
+                                                   + "; "
                                                    "frame-ancestors 'none'"})
 
         def _get(self, path: str, q: Dict[str, list]) -> None:
@@ -560,6 +595,68 @@ def make_handler(app: WebApp):
     return Handler
 
 
+# ---------- デスクトップ版: ソケットを使わずに 1 件答える ----------
+class _Capture(io.BytesIO):
+    """応答を受ける入れ物。handler が終わりに close() しても中身を残す。"""
+
+    def close(self) -> None:  # noqa: D401
+        pass
+
+
+class _Conn:
+    """handler に渡す「接続」の代わり（読む口と書く口だけ）。"""
+
+    def __init__(self, raw: bytes):
+        self.rfile, self.wfile = io.BytesIO(raw), _Capture()
+
+    def makefile(self, mode: str, *a, **k):
+        return self.rfile if "r" in mode else self.wfile
+
+    def sendall(self, data: bytes) -> None:
+        self.wfile.write(data)
+
+
+def call_handler(handler_cls, method: str, path: str, query: str, headers, body: bytes):
+    """ブラウザ版と**同じ handler** に要求を 1 件通し、(状態, 見出し, 本文) を返す（デスクトップ版の bridge.py から）。
+
+    待ち受けはしない。要求を HTTP の形のバイト列にして handler に読ませ、書いた応答を読み取る。
+    画面の処理・トークン・Host の確認・エラーの形は、ブラウザ版とまったく同じ道を通る。
+    """
+    target = path + (f"?{query}" if query else "")
+    lines = [f"{method} {target} HTTP/1.1"]
+    seen_len = False
+    for k, v in headers:
+        if str(k).lower() == "content-length":
+            continue
+        lines.append(f"{k}: {v}")
+    lines.append(f"Content-Length: {len(body)}")
+    lines.append("Connection: close")
+    raw = ("\r\n".join(lines) + "\r\n\r\n").encode("utf-8") + body
+    conn = _Conn(raw)
+
+    class _Srv:
+        server_name, server_port = "app.localhost", 0
+
+    h = handler_cls.__new__(handler_cls)
+    h.request, h.client_address, h.server = conn, ("127.0.0.1", 0), _Srv()
+    h.rfile, h.wfile = conn.rfile, conn.wfile
+    h.close_connection = True
+    h.handle_one_request()
+    data = conn.wfile.getvalue()
+    head, _, rest = data.partition(b"\r\n\r\n")
+    hl = head.decode("iso-8859-1").split("\r\n")
+    try:
+        status = int(hl[0].split(" ", 2)[1])
+    except (IndexError, ValueError):
+        return 500, [("Content-Type", "text/plain; charset=utf-8")], "応答を作れませんでした".encode("utf-8")
+    out = []
+    for line in hl[1:]:
+        k, _, v = line.partition(":")
+        if k.lower() not in ("connection", "server", "date"):
+            out.append((k.strip(), v.strip()))
+    return status, out, rest
+
+
 # ---------- 起動 ----------
 _LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # 127.0.0.1 はプロキシを通さない
 
@@ -601,6 +698,11 @@ def serve(paths: Paths, open_browser: bool = True, port: Optional[int] = None,
         info = _read_json(info_file)
         url = info.get("url")
         held = _read_json(paths.runtime / "web.lock")
+        if held.get("mode", "browser") == "desktop":
+            # デスクトップ版が動いている。後から開いたブラウザ版が止まる（デスクトップ版には触らない）
+            notify("倉入実績集計のデスクトップ版が動いています。ブラウザ版は同時に使えません。"
+                   "デスクトップ版の窓を使うか、閉じてから起動してください。")
+            return 5
         t0 = time.time()
         while True:                      # 本当に前回のツールが動いている。5 秒まで応答を待つ
             if url and _probe(url):
@@ -695,6 +797,54 @@ def _kill(pid: int) -> bool:
         return False
 
 
+def _ask_close(pid: int) -> bool:
+    """窓に「閉じて」と頼む（Windows は taskkill の /F 無し = 窓を閉じる知らせ。画面の終了と同じ確認を通る）。"""
+    try:
+        if os.name == "nt":
+            import subprocess
+            return subprocess.run(["taskkill", "/PID", str(pid)], capture_output=True,
+                                  creationflags=0x08000000).returncode == 0
+        import signal
+        os.kill(pid, signal.SIGTERM)
+        return True
+    except OSError:
+        return False
+
+
+def _stop_desktop(paths: Paths, held: Dict[str, Any], force_wait: float) -> int:
+    """stop.bat から、デスクトップ版を止める。窓（exe）に閉じてもらい、終わらなければ exe ごと止める。
+
+    exe を止めると、Python と SymNavi・Excel も一緒に止まる（外枠が Windows のジョブに入れている）。
+    """
+    exe = int(held.get("exe_pid") or 0)
+    py = int(held.get("pid") or 0)
+    target = exe if exe and _pid_alive(exe) else py
+    print(f"デスクトップ版に終了を頼みます（窓の pid {target}）…")
+    _ask_close(target)
+    t0 = time.time()
+    while time.time() - t0 < force_wait:
+        if not _pid_alive(py):
+            print("終了しました。")
+            return 0
+        time.sleep(0.5)
+    print(f"{int(force_wait)} 秒たっても終わらないため、強制終了します（pid {target}）。")
+    _kill(target)
+    if target != py:
+        _kill(py)
+    time.sleep(1)
+    if _pid_alive(py):
+        print("止められませんでした。タスクマネージャーで 倉入実績集計.exe と python を終了してください。")
+        return 1
+    for f in (paths.runtime / "server.json", paths.runtime / "web.lock"):
+        try:
+            f.unlink()
+        except OSError:
+            pass
+    log.warning("片付けました。Start.vbs で起動できます（stop.bat: デスクトップ版を強制終了 pid %d）", target)
+    print("終了しました（強制終了）。片付けました。")
+    return 0
+
+
 def stop_running(paths: Paths, force_wait: float = 15.0) -> int:
     """stop.bat から。まず画面に終了を頼み、応答しない・終わらない時は強制終了してロックを片付ける。
 
@@ -720,6 +870,8 @@ def stop_running(paths: Paths, force_wait: float = 15.0) -> int:
         else:
             print("倉入実績集計は動いていません。")
         return 0
+    if held.get("mode") == "desktop":
+        return _stop_desktop(paths, held, force_wait)
     asked = False
     if url and _probe(url):
         try:

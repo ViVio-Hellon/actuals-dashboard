@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 .venv/
 config/credentials.json
+src-tauri/target/
+src-tauri/gen/

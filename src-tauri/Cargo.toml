@@ -1,0 +1,33 @@
+# デスクトップ版の外枠(Rust/Tauri)。業務の処理は Python(`bridge.py`)が持つ。
+# ここが持つのは: 窓・Python の起動と見張り・二重起動の防止・終了の確認・フォルダを選ぶ窓・起動の記録。
+# 詳しくは docs/03_デスクトップ版.md(python-web-tools と同じ作り)
+[package]
+name = "actuals-dashboard-desktop"
+version = "0.2.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "ActualsDashboard"
+path = "src/main.rs"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

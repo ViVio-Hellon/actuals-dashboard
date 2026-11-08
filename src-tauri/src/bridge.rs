@@ -1,0 +1,619 @@
+//! Python(`bridge.py`)を子として起動し、標準入出力で要求を渡す。
+//!
+//! やりとりの形は `bridge.py` の説明と同じ:
+//!
+//! ```text
+//! 要求  {"id": 7, "method": "POST", "path": "/api/x", "query": "", "headers": [[k, v]], "len": 12}\n<本文>
+//! 応答  {"id": 7, "status": 200, "headers": [[k, v]], "len": 345}\n<本文>
+//! 知らせ {"event": "started" | "quit" | "fatal", ...}\n
+//! ```
+//!
+//! **ポートは使わない。** 画面(WebView)からの要求は、Tauri の独自の宛先
+//! (`app://`)で受けて、ここから Python へ渡す。
+
+use std::collections::{HashMap, VecDeque};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use serde_json::{json, Value};
+
+/// 標準エラーの末尾を何行覚えておくか(起動に失敗したとき画面に出す)
+const STDERR_LINES: usize = 60;
+
+/// 1件の本文の上限。Python 側(`bridge.py` の `MAX_BODY`)と同じ値。
+/// 超えるものは送る前に断る(送ると Python が読み捨てるまで待たせるだけ。VER4.8.82)
+pub const MAX_BODY: usize = 64 * 1024 * 1024;
+/// 上限を超えたときの言い分(`bridge.py` の `TOO_LARGE_MESSAGE` と同じ文)
+pub const TOO_LARGE_MESSAGE: &str = "64MB を超えるものは渡せません。";
+
+/// 1件の応答を待つ上限。取り込みなどの長い処理は背景で走るので、
+/// 1件がこれほど掛かることは無い。止まったまま待たせきりにしないための上限
+const REPLY_TIMEOUT: Duration = Duration::from_secs(600);
+
+pub struct Reply {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+/// 起動できなかった理由。画面にそのまま出す
+#[derive(Clone, Debug)]
+pub struct Failure {
+    pub message: String,
+    pub hint: String,
+    pub log_dir: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Phase {
+    /// まだ Python を起動していない / 起動待ち
+    Starting,
+    /// 要求を受け付けている
+    Started,
+    /// 終わった(終了してよいと言われた・落ちた)
+    Ended,
+}
+
+struct State {
+    phase: Phase,
+    failure: Option<Failure>,
+    /// どの Python で動いているか(画面の診断用)
+    python: String,
+}
+
+type Pending = Arc<Mutex<HashMap<u64, mpsc::Sender<Reply>>>>;
+
+pub struct Bridge {
+    root: PathBuf,
+    token: String,
+    state: Mutex<State>,
+    changed: Condvar,
+    stdin: Mutex<Option<ChildStdin>>,
+    child: Mutex<Option<Child>>,
+    pending: Pending,
+    next_id: AtomicU64,
+    stderr: Arc<Mutex<VecDeque<String>>>,
+    on_quit: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    on_lost: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+}
+
+impl Bridge {
+    pub fn new(root: PathBuf, token: String) -> Arc<Self> {
+        Arc::new(Self {
+            root,
+            token,
+            state: Mutex::new(State {
+                phase: Phase::Starting,
+                failure: None,
+                python: String::new(),
+            }),
+            changed: Condvar::new(),
+            stdin: Mutex::new(None),
+            child: Mutex::new(None),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            next_id: AtomicU64::new(1),
+            stderr: Arc::new(Mutex::new(VecDeque::new())),
+            on_quit: Mutex::new(None),
+            on_lost: Mutex::new(None),
+        })
+    }
+
+    /// 「終了してよい」と言われたときに呼ぶもの(窓を閉じてアプリを終える)
+    pub fn set_on_quit(&self, f: impl Fn() + Send + Sync + 'static) {
+        *self.on_quit.lock().unwrap() = Some(Box::new(f));
+    }
+
+    /// 受け付けていた Python が、言われもせずに居なくなったときに呼ぶもの
+    /// (窓を読み直して、理由の画面を出す)
+    pub fn set_on_lost(&self, f: impl Fn() + Send + Sync + 'static) {
+        *self.on_lost.lock().unwrap() = Some(Box::new(f));
+    }
+
+    pub fn phase(&self) -> Phase {
+        self.state.lock().unwrap().phase.clone()
+    }
+
+    pub fn failure(&self) -> Option<Failure> {
+        self.state.lock().unwrap().failure.clone()
+    }
+
+    pub fn python(&self) -> String {
+        self.state.lock().unwrap().python.clone()
+    }
+
+    pub fn stderr_tail(&self) -> Vec<String> {
+        self.stderr.lock().unwrap().iter().cloned().collect()
+    }
+
+    /// 受け付けが始まるか、終わるまで待つ。始まっていれば `true`
+    pub fn wait_started(&self, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        let mut state = self.state.lock().unwrap();
+        while state.phase == Phase::Starting {
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            state = self.changed.wait_timeout(state, deadline - now).unwrap().0;
+        }
+        state.phase == Phase::Started
+    }
+
+    fn set_phase(&self, phase: Phase, failure: Option<Failure>) {
+        let mut state = self.state.lock().unwrap();
+        // 一度失敗の理由が入ったら、あとの「終わった」で消さない
+        if failure.is_some() || state.failure.is_none() {
+            if failure.is_some() {
+                state.failure = failure;
+            }
+        }
+        state.phase = phase;
+        self.changed.notify_all();
+    }
+
+    /// Python を探して起動する。**見つかるまで候補を順に試す。**
+    ///
+    /// Windows には「Python が入っていないのに `python.exe` がある」状態がある
+    /// (Microsoft Store へ案内するだけの代役)。それは何も話さずにすぐ終わるので、
+    /// 1行も返さずに終わった候補は「使えない」として次へ進む。
+    pub fn start(self: &Arc<Self>) {
+        let script = self.root.join("bridge.py");
+        if !script.is_file() {
+            self.set_phase(
+                Phase::Ended,
+                Some(Failure {
+                    message: format!("bridge.py が見つかりません: {}", script.display()),
+                    hint: "倉入実績集計.exe は、ツール一式（start_app.py・bridge.py）が入ったフォルダの中に置いてください\
+                           (ショートカットを作るのは大丈夫です)。"
+                        .into(),
+                    log_dir: String::new(),
+                }),
+            );
+            return;
+        }
+        let mut tried = Vec::new();
+        for (program, args) in python_candidates(&self.root) {
+            tried.push(program.clone());
+            match self.spawn(&program, &args, &script) {
+                Ok(()) => {}
+                Err(_) => continue, // 見つからない
+            }
+            // 1行目(started / fatal)か、何も言わずに終わるのを待つ
+            let mut state = self.state.lock().unwrap();
+            while state.phase == Phase::Starting {
+                state = self.changed.wait(state).unwrap();
+            }
+            let spoke = state.phase == Phase::Started || state.failure.is_some();
+            drop(state);
+            if spoke {
+                return;
+            }
+            // 何も言わずに終わった。次の候補へ
+            let mut state = self.state.lock().unwrap();
+            state.phase = Phase::Starting;
+        }
+        self.set_phase(
+            Phase::Ended,
+            Some(Failure {
+                message: "Python が見つかりません(または起動できません)".into(),
+                hint: format!(
+                    "Python 3.8 以上が要ります(追加のパッケージは要りません)。\
+                     入っているのに見つからない時は、ツールのフォルダの config\\python_path.txt に\
+                     python.exe のフルパスを書いてください(start.bat と同じ)。\n\n試したもの: {}",
+                    tried.join(" / ")
+                ),
+                log_dir: String::new(),
+            }),
+        );
+    }
+
+    fn spawn(self: &Arc<Self>, program: &str, args: &[String], script: &Path) -> std::io::Result<()> {
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .arg("-X")
+            .arg("utf8")
+            .arg(script)
+            .current_dir(&self.root)
+            .env("ACTUALS_TOKEN", &self.token)
+            // 窓(この exe)の番号。stop.bat が窓に「閉じて」と頼む相手。web.lock に書かれる
+            .env("ACTUALS_EXE_PID", std::process::id().to_string())
+            .env("PYTHONIOENCODING", "utf-8")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // コンソールの窓を出さない
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = command.spawn()?;
+        // **Python とその子(SymNavi・cscript・Excel・PowerShell)を、この exe の終わりと一緒に止める**。
+        // ブラウザ版では強制終了されると SymNavi や Excel が残ることがあった
+        #[cfg(windows)]
+        job::kill_with_this_exe(&child);
+        let stdout = child.stdout.take().expect("stdout");
+        let stderr = child.stderr.take().expect("stderr");
+        *self.stdin.lock().unwrap() = child.stdin.take();
+        *self.child.lock().unwrap() = Some(child);
+        self.state.lock().unwrap().python = program.to_string();
+
+        // 標準エラー: 末尾だけ覚える(Python のログもここに出る)
+        //
+        // **UTF-8 でない行が来ても読み続ける**(VER4.8.115)。前は `lines()` が UTF-8 でない行
+        // (子の変換が Shift_JIS で書いた一言など)で失敗した時点で読むのをやめていた。読む側が
+        // 居なくなると管が詰まり、Python がログを1行書くところで止まる(アプリ全体のフリーズ)
+        let tail = self.stderr.clone();
+        thread::Builder::new()
+            .name("python-stderr".into())
+            .spawn(move || keep_tail(stderr, &tail))?;
+
+        // 標準出力: 応答と知らせを読む
+        let me = self.clone();
+        thread::Builder::new()
+            .name("python-stdout".into())
+            .spawn(move || me.read_loop(stdout))?;
+        Ok(())
+    }
+
+    fn read_loop(self: Arc<Self>, stdout: impl Read) {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        let mut was_started = false;
+        let mut said_quit = false;
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let head: Value = match serde_json::from_str(line.trim_end()) {
+                Ok(v) => v,
+                Err(_) => continue, // 形の崩れた行は飛ばす(本来は来ない)
+            };
+            let len = head.get("len").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let mut body = vec![0u8; len];
+            if len > 0 && reader.read_exact(&mut body).is_err() {
+                break;
+            }
+            if let Some(event) = head.get("event").and_then(Value::as_str) {
+                was_started |= event == "started";
+                said_quit |= event == "quit";
+                self.on_event(event, &head);
+                continue;
+            }
+            let id = head.get("id").and_then(Value::as_u64).unwrap_or(0);
+            let reply = Reply {
+                status: head.get("status").and_then(Value::as_u64).unwrap_or(500) as u16,
+                headers: head
+                    .get("headers")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|pair| {
+                                let pair = pair.as_array()?;
+                                Some((pair.first()?.as_str()?.to_string(), pair.get(1)?.as_str()?.to_string()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                body,
+            };
+            if let Some(sender) = self.pending.lock().unwrap().remove(&id) {
+                let _ = sender.send(reply);
+            }
+        }
+        // 終わった。待っている要求には「答えられない」を返す(送り手を捨てる)
+        self.pending.lock().unwrap().clear();
+        self.set_phase(Phase::Ended, None);
+        if was_started && !said_quit {
+            if let Some(f) = self.on_lost.lock().unwrap().as_ref() {
+                f();
+            }
+        }
+    }
+
+    fn on_event(&self, event: &str, head: &Value) {
+        match event {
+            "started" => self.set_phase(Phase::Started, None),
+            "fatal" => {
+                let text = |key: &str| head.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+                self.set_phase(
+                    Phase::Ended,
+                    Some(Failure { message: text("message"), hint: text("hint"), log_dir: text("log_dir") }),
+                );
+            }
+            "quit" => {
+                if let Some(f) = self.on_quit.lock().unwrap().as_ref() {
+                    f();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 要求を1件渡して、応答を待つ。
+    pub fn call(&self, method: &str, path: &str, query: &str, headers: Vec<(String, String)>, body: &[u8]) -> Result<Reply, String> {
+        if self.phase() != Phase::Started {
+            return Err("Python が動いていません".into());
+        }
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let mut headers = headers;
+        headers.retain(|(k, _)| !k.eq_ignore_ascii_case("x-tool-token"));
+        headers.push(("X-Tool-Token".into(), self.token.clone()));
+        let head = json!({
+            "id": id,
+            "method": method,
+            "path": path,
+            "query": query,
+            "headers": headers.iter().map(|(k, v)| vec![k.clone(), v.clone()]).collect::<Vec<_>>(),
+            "len": body.len(),
+        });
+        let (sender, receiver) = mpsc::channel();
+        self.pending.lock().unwrap().insert(id, sender);
+        {
+            let mut stdin = self.stdin.lock().unwrap();
+            let Some(pipe) = stdin.as_mut() else {
+                self.pending.lock().unwrap().remove(&id);
+                return Err("Python への通り道が閉じています".into());
+            };
+            let mut frame = serde_json::to_vec(&head).map_err(|e| e.to_string())?;
+            frame.push(b'\n');
+            frame.extend_from_slice(body);
+            if let Err(e) = pipe.write_all(&frame).and_then(|_| pipe.flush()) {
+                self.pending.lock().unwrap().remove(&id);
+                return Err(format!("Python へ渡せませんでした: {e}"));
+            }
+        }
+        receiver.recv_timeout(REPLY_TIMEOUT).map_err(|_| {
+            self.pending.lock().unwrap().remove(&id);
+            "Python から応答がありません".to_string()
+        })
+    }
+
+    /// 終える。標準入力を閉じて Python に終わってもらい、終わらなければ止める。
+    pub fn shutdown(&self, grace: Duration) {
+        self.stdin.lock().unwrap().take(); // 閉じる = 「もう要求は来ない」
+        let mut child = self.child.lock().unwrap();
+        if let Some(child) = child.as_mut() {
+            let deadline = Instant::now() + grace;
+            while Instant::now() < deadline {
+                if let Ok(Some(_)) = child.try_wait() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// 試す Python の順番。`ACTUALS_PYTHON` → ツールの `config/python_path.txt`(start.bat と同じ) → python → py -3。
+fn python_candidates(root: &Path) -> Vec<(String, Vec<String>)> {
+    if let Ok(path) = std::env::var("ACTUALS_PYTHON") {
+        if !path.trim().is_empty() {
+            return vec![(path, vec![])];
+        }
+    }
+    let mut out = Vec::new();
+    if let Ok(text) = std::fs::read_to_string(root.join("config").join("python_path.txt")) {
+        let line = text.trim_start_matches('\u{feff}').lines().next().unwrap_or("").trim().trim_matches('"').to_string();
+        if !line.is_empty() {
+            out.push((line, vec![]));
+        }
+    }
+    if cfg!(windows) {
+        // python.exe → py ランチャ(PATH に入れ忘れても py は入っていることが多い)
+        out.push(("python.exe".into(), vec![]));
+        out.push(("py.exe".into(), vec!["-3".into()]));
+    } else {
+        out.push(("python3".into(), vec![]));
+        out.push(("python".into(), vec![]));
+    }
+    out
+}
+
+/// 標準エラーを読み続け、末尾 `STDERR_LINES` 行だけ覚える。
+///
+/// **UTF-8 でない行が来ても読み続ける**(VER4.8.115。読めない字は置き換える)。
+/// 読むのをやめるのは管が閉じた・読めなくなったときだけ。
+fn keep_tail(stream: impl Read, tail: &Mutex<VecDeque<String>>) {
+    let mut reader = BufReader::new(stream);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) => break,
+            Ok(_) => {
+                let line = String::from_utf8_lossy(&buf)
+                    .trim_end_matches(|c| c == '\r' || c == '\n')
+                    .to_string();
+                let mut tail = tail.lock().unwrap();
+                if tail.len() >= STDERR_LINES {
+                    tail.pop_front();
+                }
+                tail.push_back(line);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+}
+
+/// 起動ごとの合言葉。ほかのプロセスから Python へ要求は届かないが
+/// (標準入出力は親子だけのもの)、アプリ側の確認はそのまま生かす。
+pub fn new_token() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    let mut text = String::new();
+    for _ in 0..4 {
+        let mut h = RandomState::new().build_hasher();
+        h.write_u128(Instant::now().elapsed().as_nanos());
+        h.write_u32(std::process::id());
+        text.push_str(&format!("{:016x}", h.finish()));
+    }
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 標準エラーはutf8でない行が来ても読み続ける() {
+        // 前は `lines()` が Shift_JIS の行で失敗した時点で読むのをやめ、管が詰まって Python が止まった
+        let tail = Mutex::new(VecDeque::new());
+        keep_tail(std::io::Cursor::new(b"first\n\x82\xa0 sjis\r\nlast\n".to_vec()), &tail);
+        let got: Vec<String> = tail.lock().unwrap().iter().cloned().collect();
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0], "first");
+        assert!(got[1].ends_with(" sjis"));
+        assert_eq!(got[2], "last");
+    }
+
+    #[test]
+    fn 標準エラーは末尾だけ覚える() {
+        let tail = Mutex::new(VecDeque::new());
+        let text: String = (0..STDERR_LINES + 5).map(|i| format!("{i}\n")).collect();
+        keep_tail(std::io::Cursor::new(text.into_bytes()), &tail);
+        let got = tail.lock().unwrap();
+        assert_eq!(got.len(), STDERR_LINES);
+        assert_eq!(got.back().unwrap(), &format!("{}", STDERR_LINES + 4));
+    }
+
+    #[test]
+    fn 合言葉は毎回違い十分に長い() {
+        let a = new_token();
+        let b = new_token();
+        assert_eq!(a.len(), 64);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn pythonの探し方() {
+        // 環境変数を触るので1つの試験にまとめる
+        let dir = std::env::temp_dir().join(format!("ad_py_test_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("config")).unwrap();
+        std::env::set_var("ACTUALS_PYTHON", "/opt/py/bin/python3");
+        assert_eq!(python_candidates(&dir), vec![("/opt/py/bin/python3".to_string(), vec![])]);
+        std::env::remove_var("ACTUALS_PYTHON");
+        std::fs::write(dir.join("config").join("python_path.txt"), "\u{feff}\"C:\\Py\\python.exe\"\r\n").unwrap();
+        let got = python_candidates(&dir);
+        assert_eq!(got[0], ("C:\\Py\\python.exe".to_string(), vec![]), "python_path.txt が先");
+        assert!(got.len() >= 3);
+    }
+}
+
+/// Windows のジョブ(プロセスのまとまり)。**exe が終わると、まとまりの中のプロセスを全部止める**。
+///
+/// 子(Python)を入れると、子が起こした孫(SymNavi・cscript・Excel・`py.exe` が起こす本物の Python)も
+/// 同じまとまりに入る。exe が × で閉じても、落ちても、タスクマネージャーで止められても、OS がジョブの
+/// 握りを閉じたときに残りを止める(`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`)。
+/// 追加の部品(crate)は使わず、kernel32 を直接呼ぶ。
+#[cfg(windows)]
+mod job {
+    use std::ffi::c_void;
+    use std::os::windows::io::AsRawHandle;
+    use std::process::Child;
+
+    type Handle = *mut c_void;
+
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+    /// `JobObjectExtendedLimitInformation`
+    const EXTENDED_LIMIT_INFORMATION: i32 = 9;
+
+    /// `JOBOBJECT_BASIC_LIMIT_INFORMATION`
+    #[repr(C)]
+    #[derive(Default)]
+    struct BasicLimit {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        limit_flags: u32,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    }
+
+    /// `IO_COUNTERS`
+    #[repr(C)]
+    #[derive(Default)]
+    struct IoCounters {
+        read_operation_count: u64,
+        write_operation_count: u64,
+        other_operation_count: u64,
+        read_transfer_count: u64,
+        write_transfer_count: u64,
+        other_transfer_count: u64,
+    }
+
+    /// `JOBOBJECT_EXTENDED_LIMIT_INFORMATION`
+    #[repr(C)]
+    #[derive(Default)]
+    struct ExtendedLimit {
+        basic: BasicLimit,
+        io: IoCounters,
+        process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateJobObjectW(attributes: *mut c_void, name: *const u16) -> Handle;
+        fn SetInformationJobObject(job: Handle, class: i32, info: *mut c_void, length: u32) -> i32;
+        fn AssignProcessToJobObject(job: Handle, process: Handle) -> i32;
+        fn CloseHandle(handle: Handle) -> i32;
+    }
+
+    /// 子をジョブに入れる。**ジョブの握りは閉じずに持ち続ける**(exe が終わるときに OS が閉じ、そこで止まる)。
+    /// 入れられなくても起動は止めない(前と同じ動きになるだけ)。
+    pub fn kill_with_this_exe(child: &Child) {
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
+            if job.is_null() {
+                eprintln!("ジョブを作れませんでした(閉じたときに子が残ることがあります)");
+                return;
+            }
+            let mut info = ExtendedLimit::default();
+            info.basic.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = SetInformationJobObject(
+                job,
+                EXTENDED_LIMIT_INFORMATION,
+                &mut info as *mut ExtendedLimit as *mut c_void,
+                std::mem::size_of::<ExtendedLimit>() as u32,
+            );
+            if ok == 0 || AssignProcessToJobObject(job, child.as_raw_handle() as Handle) == 0 {
+                eprintln!("子をジョブに入れられませんでした(閉じたときに子が残ることがあります)");
+                CloseHandle(job);
+            }
+            // 入れられたときは握りを閉じない(閉じると、その場で子が止まる)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn layout_matches_windows() {
+            // 64ビットの Windows での大きさ(winnt.h)。食い違うと SetInformationJobObject が断る
+            assert_eq!(std::mem::size_of::<BasicLimit>(), 64);
+            assert_eq!(std::mem::size_of::<IoCounters>(), 48);
+            assert_eq!(std::mem::size_of::<ExtendedLimit>(), 144);
+        }
+    }
+}
