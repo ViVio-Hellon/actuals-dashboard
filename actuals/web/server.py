@@ -680,7 +680,11 @@ def _open_browser(url: str) -> None:
 
 def notify(message: str) -> None:
     log.error("%s", message)
-    if sys.platform == "win32" and (sys.stdout is None or not getattr(sys.stdout, "isatty", lambda: False)()):
+    # 窓で知らせるのは、出力先が無い時（Start.vbs → pythonw）だけ。start.bat・stop.bat・ほかのプログラムから
+    # 呼ばれた時（出力が管につながっている）は、見えない窓が OK を待ったまま止まらないよう、出力に書くだけにする
+    if sys.stdout is not None:
+        print(message, flush=True)
+    if sys.platform == "win32" and sys.stdout is None and not os.environ.get("ACTUALS_NO_DIALOG"):
         try:
             import ctypes
             ctypes.windll.user32.MessageBoxW(None, message, "倉入実績集計", 0x10)  # type: ignore[attr-defined]
