@@ -326,6 +326,18 @@ def _sel(v: Any) -> Any:
         raise UserError("グループの指定が不正です。")
 
 
+def _settings_files(paths: Paths, svc: Service) -> Dict[str, Any]:
+    """設定の画面に出す: どのファイルに保存されるか・最後に書いた時刻（パスワードの中身は出さない）。"""
+    def info(p: Path) -> Dict[str, Any]:
+        try:
+            t = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        except OSError:
+            t = ""
+        return {"path": str(p), "updated": t}
+    return {"defaults": info(svc.settings.default_file), "user": info(svc.settings.user_file),
+            "credentials": info(paths.config / "credentials.json")}
+
+
 def make_handler(app: WebApp):
     svc = app.service
 
@@ -488,7 +500,7 @@ def make_handler(app: WebApp):
                                                    for k, g, lb, n, kd in EDITABLE],
                                         "groups": GROUPS,
                                         "data_dir": str(app.paths.base), "log_dir": logsetup.active_dir(),
-                                        "log": logsetup.status()})
+                                        "log": logsetup.status(), "files": _settings_files(app.paths, svc)})
             return self._err(404, "not_found", "not found")
 
         # ----- POST -----

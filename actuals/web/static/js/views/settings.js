@@ -86,7 +86,9 @@ export async function render(main, ctx, stale) {
           ${v.log.problem ? `<div class="note" style="color:var(--act-danger)">${esc(v.log.problem)}</div>` : ""}</dd>
         ${v.log.legacy.length ? `<dt>前の形のログ</dt><dd>${v.log.legacy.map(esc).join("<br>")}
           <span class="note">（v0.1.0 まで。移さず・もう書きません。古いものの片付けだけ同じに行います）</span></dd>` : ""}
-        <dt>設定の既定値</dt><dd>ツールのフォルダの config\\settings.json（ここで変えた項目だけ、データの場所の config\\settings.json に残ります。全 PC に同じ既定を配る時はツール側を書き換えて配ります）</dd>
+        <dt>この画面で保存した設定</dt><dd>${esc(v.files.user.path)}<br><span class="note">「保存」で書くのはこのファイルです（既定と違う項目だけ）。最後に書いた時刻: ${esc(v.files.user.updated || "まだありません")}</span></dd>
+        <dt>SymNavi のログイン</dt><dd>${esc(v.files.credentials.path)}<br><span class="note">①-4 の「登録」で書くのはこのファイルです（「保存」とは別。この PC だけ）。最後に書いた時刻: ${esc(v.files.credentials.updated || "まだありません")}</span></dd>
+        <dt>設定の既定値（書き換えない）</dt><dd>${esc(v.files.defaults.path)}<br><span class="note">ツールが書き込むことはありません。全 PC に同じ既定を配る時だけ、手で書き換えて配ります。</span></dd>
       </dl></div></section>
   </div>`;
 
