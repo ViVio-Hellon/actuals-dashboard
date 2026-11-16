@@ -87,7 +87,12 @@ Python（標準ライブラリだけ）
 - 入力を変えると、保存する前に右の「状態」が変わります（ある・書ける・既定と違う）。
 - 「データ更新」の取り出し方は RNEConverter と同じです: 拡張 API で取り出し → だめなら画面（DDE）で xls に保存させて読む →
   さらにだめなら旧 VBA と同じ Excel 経由。進み具合はデータ画面に出て、「中断」で SymNavi ごと止められます。
-- 既定値はツールのフォルダの `config\settings.json`。全 PC に同じ既定を配る時はここを書き換えて配ります。画面で変えた項目だけが PC ごとに残ります。
+- **設定は全 PC 共通**です。「保存」はツールのフォルダの `config\settings.json` に書きます（全員が共有フォルダの同じツールを開くので、
+  1 台で保存すれば全 PC に効き、ツールのフォルダを配れば設定も付いていく）。PC ごとの設定は持ちません。
+- **SymNavi のログインも全 PC 共通**です。①-4 の「登録」はツールのフォルダの `config\credentials.json` に書きます（1 回登録すれば全 PC で使える）。
+  ツールのフォルダを見られる人は読めるので、共有フォルダの権限に気を付けてください（画面とログには出しません）。
+- SymNavi の入っていない PC では「データ更新」を止めます（「この PC には SymNavi が入っていないため…」）。集計を見るのには要りません。
+- `{DATA}`（CSV の書き出し先・作業フォルダ）は各 PC のデータの場所です。
 
 ## 起動と終了
 
@@ -116,7 +121,8 @@ stop.bat も同じ判定で、本人でない番号は終わらせず、ファ�
 | 倉入実績（取り出したもの） | 作業フォルダに一時的に置き、取り込んだら消す | SymNavi の結果を読んで、そのまま蓄積へ |
 | 蓄積した実績 | 共有 `actuals_history.sqlite3` | ロット番号ごとに蓄積。同じロットは新しい内容に置き換え、消しはしない |
 | 条件表・手動訂正・変更履歴 | 共有 `actuals_master.sqlite3` | 全 PC 共通。版番号・画面が見ていた値と比べ、別の人の保存を上書きしない（409） |
-| 設定・ログ・写し・SymNavi のログイン | `%USERPROFILE%\ActualsDashboard`（`ACTUALS_DASHBOARD_HOME` で変更可） | PC ごと |
+| 設定・SymNavi のログイン | ツールのフォルダの `config\settings.json`・`config\credentials.json` | 全 PC 共通（配れる） |
+| ログ・写し・CSV・作業フォルダ | `%USERPROFILE%\ActualsDashboard`（`ACTUALS_DASHBOARD_HOME` で変更可） | PC ごと |
 
 **共有フォルダを後から決めた時:** それまで ② が空欄で、この PC の中（`%USERPROFILE%\ActualsDashboard\shared`）に貯めた分は、
 「データ」画面の「この PC に貯めた分を共有フォルダへ移す」で移せます（② を保存した時にも知らせます）。
@@ -178,7 +184,7 @@ all-tools（日報複合ツール）と同じ決まりです。
 ## 試験と照合
 
 ```
-python -m unittest discover -s tests -t .              # 110 件（正解データ照合・境界値・同時保存・画面 API・旧ブック読込・パス設定・データ更新・停止・ログ）
+python -m unittest discover -s tests -t .              # 115 件（正解データ照合・境界値・同時保存・画面 API・旧ブック読込・パス設定・データ更新・停止・ログ）
 python tools/compare_with_vba.py 旧ツールで集計したブック.xlsm   # 並行運用中の突き合わせ
 python tools/make_golden.py 受領ブック.xlsm tests/fixtures/golden_YYYYMM.json   # 正解データを作る
 ```

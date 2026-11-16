@@ -214,7 +214,9 @@ def check_all(values: Dict[str, Any], paths: Paths) -> Dict[str, Any]:
     cred = credentials.status(paths)
     return {
         "rne_path": check_rne(v["rne_path"], paths),
-        "symnavi_exe": check_exe(v["symnavi_exe"], paths, what="SymNavi が入っている PC で使ってください（旧ツールと同じ C:\\NAVICL\\bin\\SymNavi.exe）。"),
+        "symnavi_exe": check_exe(v["symnavi_exe"], paths, missing_state="warn",
+                                 what="この PC には SymNavi がありません。この PC ではデータ更新は使えません（集計は見られます）。"
+                                      "設定は全 PC 共通なので、SymNavi のある PC の場所（旧ツールと同じ C:\\NAVICL\\bin\\SymNavi.exe）のままにしてください。"),
         "symnavi_server": _item("ok", "旧ツールと同じです。") if v["symnavi_server"].strip() == "NlmFaNgyNavd"
         else (_item("warn", "旧ツール（NlmFaNgyNavd）と違います。") if v["symnavi_server"].strip() else _item("missing", "未設定です。")),
         "credentials": (_item("ok", f"登録済み（ID {cred['id']}・{cred['source']}）。") if cred["ready"]

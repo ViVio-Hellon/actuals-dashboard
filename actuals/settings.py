@@ -43,7 +43,19 @@ class Paths:
 
     @property
     def config(self) -> Path:
+        """この PC のデータの場所の config（前の版の PC ごとの設定・ログインが残っている所。いまは書かない）。"""
         return self.base / "config"
+
+    @property
+    def tool_config(self) -> Path:
+        """**設定とログインの置き場所**: ツールのフォルダの config（全員で同じツールを開くので全 PC 共通）。
+
+        ACTUALS_TOOL_CONFIG で替えられる（試験・開発用。"{DATA}" はこの PC のデータの場所）。
+        """
+        env = os.environ.get("ACTUALS_TOOL_CONFIG", "").strip()
+        if env:
+            return Path(env.replace("{DATA}", str(self.base)))
+        return APP_ROOT / "config"
 
     @property
     def runtime(self) -> Path:
@@ -116,18 +128,36 @@ def is_full_path(text: str) -> bool:
     return bool(text) and (os.path.isabs(text) or ntpath.isabs(text))
 
 
+# 入っていない項目の値（ツールの config/settings.json に書かれていなければこれ）
+DEFAULTS: Dict[str, Any] = {
+    "rne_path": "", "symnavi_exe": "C:\\NAVICL\\bin\\SymNavi.exe", "symnavi_server": "NlmFaNgyNavd",
+    "shared_dir": "", "export_dir": "{DATA}/export", "log_dir": "", "work_dir": "{DATA}/work",
+    "startup_wait_sec": 20, "result_wait_sec": 120, "cscript_path": "C:\\Windows\\System32\\cscript.exe",
+    "lock_wait_sec": 10, "log_keep_days": 90,
+}
+
+
 class Settings:
+    """設定は**ツールのフォルダの config\\settings.json 1 つ**（全員で同じツールを開くので全 PC 共通。配ればそのまま付いていく）。
+
+    画面の「保存」もここへ書く。PC ごとの設定は持たない（前の版の <データの場所>\\config\\settings.json は読まない）。
+    {DATA} は各 PC のデータの場所（CSV・作業フォルダなど、PC ごとに分けたい所に使う）。
+    """
+
     def __init__(self, paths: Paths):
         self.paths = paths
-        self.default_file = APP_ROOT / "config" / "settings.json"
-        self.user_file = paths.config / "settings.json"
+        self.file = paths.tool_config / "settings.json"
+        self.default_file = self.file          # 前の名前（画面・試験から）
+        self.user_file = self.file
+        self.old_local_file = paths.config / "settings.json"
 
     def _defaults(self) -> Dict[str, Any]:
-        return json.loads(self.default_file.read_text(encoding="utf-8-sig"))
+        return dict(DEFAULTS)
 
     def _user(self) -> Dict[str, Any]:
         try:
-            return json.loads(self.user_file.read_text(encoding="utf-8-sig"))
+            d = json.loads(self.file.read_text(encoding="utf-8-sig"))
+            return d if isinstance(d, dict) else {}
         except (OSError, ValueError):
             return {}
 
@@ -142,7 +172,7 @@ class Settings:
 
     def revision(self) -> str:
         try:
-            raw = self.user_file.read_bytes()
+            raw = self.file.read_bytes()
         except OSError:
             raw = b""
         return hashlib.sha1(raw).hexdigest()[:12]
@@ -180,14 +210,17 @@ class Settings:
                     raise SettingsInputError("ログの出力パスはフルパスで入れてください（例 \\\\サーバー\\共有\\logs）。"
                                              "空欄ならこの PC の logs に書きます。")
             before = cur.get(k, defaults.get(k))
-            if v == defaults.get(k):
-                cur.pop(k, None)
-            else:
-                cur[k] = v
+            cur[k] = v                              # 既定と同じでも書く（ファイルを見れば全部分かるように）
             if before != v:
                 log_lines.append(f"{k}: {before!r} → {v!r}")
-        self.user_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.user_file.with_suffix(".tmp")
-        tmp.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, self.user_file)
+        for k, v in defaults.items():
+            cur.setdefault(k, v)
+        try:
+            self.file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.file.with_name(f".{self.file.name}.{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, self.file)
+        except OSError as e:
+            raise SettingsInputError(f"ツールのフォルダの設定に書けません（{self.file}: {e}）。"
+                                     "共有フォルダの書き込みの権限を確かめてください。")
         return self.revision(), log_lines

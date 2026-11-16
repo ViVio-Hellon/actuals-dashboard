@@ -52,7 +52,7 @@ export async function render(main, ctx, stale) {
     const rows = fs.map((f) => row(f, `${{ extract: "①", store: "②", output: "③", advanced: "" }[g]}${fs.length > 1 && g !== "advanced" ? `-${++n}` : ""}`)).join("");
     const extra = g === "extract" ? `
       <tr data-key="credentials"><th class="t"><span class="paths__no">①-${fs.length + 1}</span>SymNavi のログイン
-          <div class="note">SymNavi に入る ID とパスワード（旧ブックではフォームに書かれていたもの）。この PC にだけ保存し、画面やログには出しません。</div></th>
+          <div class="note">SymNavi に入る ID とパスワード（旧ブックではフォームに書かれていたもの）。ツールのフォルダに保存し、全 PC で使います（1 回登録すれば済む）。画面やログには出しません。</div></th>
         <td class="t"><div class="formrow">
             <input class="input" id="credId" value="${esc(v.credentials.id)}" placeholder="ID" autocomplete="off" spellcheck="false">
             <input class="input" id="credPass" type="password" placeholder="${v.credentials.has_password ? "（登録済み。変える時だけ入力）" : "パスワード"}" autocomplete="new-password">
@@ -86,9 +86,9 @@ export async function render(main, ctx, stale) {
           ${v.log.problem ? `<div class="note" style="color:var(--act-danger)">${esc(v.log.problem)}</div>` : ""}</dd>
         ${v.log.legacy.length ? `<dt>前の形のログ</dt><dd>${v.log.legacy.map(esc).join("<br>")}
           <span class="note">（v0.1.0 まで。移さず・もう書きません。古いものの片付けだけ同じに行います）</span></dd>` : ""}
-        <dt>この画面で保存した設定</dt><dd>${esc(v.files.user.path)}<br><span class="note">「保存」で書くのはこのファイルです（既定と違う項目だけ）。最後に書いた時刻: ${esc(v.files.user.updated || "まだありません")}</span></dd>
-        <dt>SymNavi のログイン</dt><dd>${esc(v.files.credentials.path)}<br><span class="note">①-4 の「登録」で書くのはこのファイルです（「保存」とは別。この PC だけ）。最後に書いた時刻: ${esc(v.files.credentials.updated || "まだありません")}</span></dd>
-        <dt>設定の既定値（書き換えない）</dt><dd>${esc(v.files.defaults.path)}<br><span class="note">ツールが書き込むことはありません。全 PC に同じ既定を配る時だけ、手で書き換えて配ります。</span></dd>
+        <dt>設定（全 PC 共通）</dt><dd>${esc(v.files.settings.path)}<br><span class="note">「保存」で書くのはツールのフォルダのこのファイルです。全員が同じツールを開くので、保存すると全 PC に効きます（ツールのフォルダを配れば設定も付いていく）。最後に書いた時刻: ${esc(v.files.settings.updated || "まだありません")}</span></dd>
+        <dt>SymNavi のログイン（全 PC 共通）</dt><dd>${esc(v.files.credentials.path)}<br><span class="note">①-4 の「登録」で書くのはこのファイルです（「保存」とは別）。1 回登録すれば全 PC で使えます。ツールのフォルダを見られる人は読めるので、フォルダの権限に気を付けてください。最後に書いた時刻: ${esc(v.files.credentials.updated || "まだありません")}</span></dd>
+        ${v.files.old_local.length ? `<dt>前の版の PC ごとの設定（使っていません）</dt><dd>${v.files.old_local.map(esc).join("<br>")}<br><span class="note">前の版でこの PC に保存したものです。いまは読みません（ログインだけは、共通のものが無い時に使います）。必要な値があれば、上の画面で入れて保存し直してください。</span></dd>` : ""}
       </dl></div></section>
   </div>`;
 

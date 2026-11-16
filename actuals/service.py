@@ -471,12 +471,15 @@ class Service:
         """SymNavi で RNE を実行して当月の倉入実績を取り出し、共有の蓄積に取り込む（旧 VBA のデータ作成）。"""
         s = self.conf()
         cred, _ = credentials.load(self.paths)
+        exe = s.get("symnavi_exe") or ""
+        if not exe or not Path(exe).is_file():
+            # 設定は全 PC 共通。SymNavi の無い PC では、ここで止める（集計を見るのには要らない）
+            raise UserError(f"この PC には SymNavi が入っていないため、データ更新できません（{exe or 'SymNavi.exe 未設定'} がありません）。"
+                            "SymNavi の入っている PC で「データ更新」してください。取り込んだ実績は共有フォルダから全 PC で見られます。")
         problems = []
         rne = Path(s.get("rne_path") or "")
         if not s.get("rne_path") or not rne.is_file():
             problems.append(f"RNE ファイルが見つかりません: {s.get('rne_path') or '（未設定）'}")
-        if not s.get("symnavi_exe") or not Path(s["symnavi_exe"]).is_file():
-            problems.append(f"SymNavi.exe が見つかりません: {s.get('symnavi_exe') or '（未設定）'}")
         if not (cred["id"] and cred["pass"]):
             problems.append("SymNavi の ID・パスワードが未登録です")
         if problems:

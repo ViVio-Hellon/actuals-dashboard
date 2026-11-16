@@ -334,8 +334,9 @@ def _settings_files(paths: Paths, svc: Service) -> Dict[str, Any]:
         except OSError:
             t = ""
         return {"path": str(p), "updated": t}
-    return {"defaults": info(svc.settings.default_file), "user": info(svc.settings.user_file),
-            "credentials": info(paths.config / "credentials.json")}
+    old = [str(p) for p in (paths.config / "settings.json", paths.config / "credentials.json") if p.is_file()]
+    return {"settings": info(svc.settings.file), "credentials": info(paths.tool_config / "credentials.json"),
+            "old_local": old}
 
 
 def make_handler(app: WebApp):

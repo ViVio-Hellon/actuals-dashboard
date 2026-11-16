@@ -174,8 +174,7 @@ class WebTest(unittest.TestCase):
         code, body = self.call("/api/rne/run", {})
         self.assertEqual(code, 422)
         msg = body["error"]["message"]
-        self.assertIn("RNE ファイルが見つかりません", msg)
-        self.assertIn("ID・パスワードが未登録", msg)
+        self.assertIn("この PC には SymNavi が入っていないため、データ更新できません", msg)   # SymNavi の無い PC は止める
 
     def test_10_credentials_never_returned(self):
         self.assertEqual(self.call("/api/credentials", {"id": "", "password": "x"})[0], 422)
