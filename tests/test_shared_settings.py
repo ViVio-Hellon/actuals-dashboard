@@ -35,7 +35,7 @@ class SharedSettings(unittest.TestCase):
         s2 = Settings(self.pc2)
         self.assertEqual(s2.load()["rne_path"], r"\\srv\rne\梱包実績.RNE")     # 別の PC でも同じ
         self.assertFalse((self.pc1.config / "settings.json").exists())          # PC ごとには書かない
-        self.assertEqual(s2.resolved()["export_dir"], str(self.pc2.base / "export"))   # {DATA} は PC ごと
+        self.assertEqual(Path(s2.resolved()["export_dir"]), self.pc2.base / "export")   # {DATA} は PC ごと
 
     def test_old_local_settings_are_not_used(self):
         self.pc1.config.mkdir(parents=True)
