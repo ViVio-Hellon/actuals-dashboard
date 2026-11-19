@@ -274,9 +274,44 @@ class Service:
         return {"override": res}
 
     # ---------- 条件表（旧 設定シート） ----------
-    def conditions(self) -> Dict[str, Any]:
+    def _group_counts(self, cs: ConditionSet, y: int, m: int, cal: str) -> Dict[str, Any]:
+        """その月に、各グループへ自動で入る件数と重量（手動訂正は数えない。条件表の効き目を見るため）。"""
+        if not (y and m) or cal not in CALENDARS:
+            return {}
+        rows, _ = self._rows(cal, [_ym(y, m)])
+        out: Dict[str, Any] = {}
+        for r in rows:
+            if r.lot.ymd(cal)[:2] != (y, m) or not r.lot.is_plate:
+                continue
+            g = classify(r.lot, cs).group
+            k = str(g or 0)
+            c = out.setdefault(k, {"count": 0, "weight": 0.0})
+            c["count"] += 1
+            c["weight"] = round(c["weight"] + (r.lot.weight or 0), 6)
+        return out
+
+    def try_lot(self, payload: Dict[str, Any], lot: str, cal: str) -> Dict[str, Any]:
+        """保存する前の条件表で、ロット 1 件がどのグループに入るか・なぜかを見せる。"""
+        rec = self.history.lot(lot.strip())
+        if rec is None:
+            raise UserError(f"ロット {lot} は取り込んだ実績にありません。")
+        cs = self._parse_conditions(payload)
+        computed = compute_lot(rec["data"])
+        j = classify(computed, cs, want_trace=True)
+        now = classify(computed, self.master.conditions())
+        names = cs.names()
+        mc = C.BASIS_COLUMNS["ｵｰﾀﾞｰ" if cs.basis_main == "ｵｰﾀﾞｰ" else "製造"]
+        return {"lot": computed.lot, "group": j.group, "name": names[j.group - 1] if j.group else "未分類",
+                "now": now.group, "now_name": names[now.group - 1] if now.group else "未分類",
+                "is_plate": computed.is_plate, "trace": j.trace,
+                "values": {"材質": _t(computed.v.get(mc["mat"])), "板厚": _t(computed.v.get(mc["t"])),
+                           "板幅": _t(computed.v.get(mc["w"])), "板丈": _t(computed.v.get(mc["l"])),
+                           "単重": computed.unit_w, "VC": _t(computed.v.get(C.VC))},
+                "override": self.master.overrides().get(computed.lot)}
+
+    def conditions(self, y: int = 0, m: int = 0, cal: str = "genba") -> Dict[str, Any]:
         cs = self.master.conditions()
-        return {"conditions": cs.to_dict(),
+        return {"conditions": cs.to_dict(), "counts": self._group_counts(cs, y, m, cal),
                 "fields": [{"key": k, "col": c, "label": lb, "kind": kd} for k, c, lb, kd in FIELDS],
                 "rule_not_material": RULE_NOT_MATERIAL, "rule_not_hit": RULE_NOT_HIT,
                 "warnings": blank_warnings(cs),
@@ -307,7 +342,7 @@ class Service:
                                 "after_name": names_new[g2 - 1] if g2 else "未分類",
                                 "weight": r.lot.weight, "override": r.override})
         return {"problems": [], "warnings": blank_warnings(new), "changes": changes, "year": y, "month": m,
-                "cal": cal}
+                "cal": cal, "counts": self._group_counts(new, y, m, cal)}
 
     def save_conditions(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         cs = self._parse_conditions(payload)

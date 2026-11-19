@@ -53,6 +53,8 @@ class ConditionSet:
     basis_not: str = "ｵｰﾀﾞｰ"                        # 旧 設定!O3
     rule_not_material: str = "material"
     rule_not_hit: str = "skip"
+    # 見る順番（グループの番号の並び）。番号（= 行・手動訂正・集計表の番号）とは別に持つ。既定は 1〜15 の順（旧ツールと同じ）
+    order: List[int] = field(default_factory=lambda: list(range(1, GROUP_COUNT + 1)))
     rev: int = 0
     updated_at: str = ""
     updated_by: str = ""
@@ -63,7 +65,7 @@ class ConditionSet:
     def to_dict(self) -> Dict[str, Any]:
         return {"rows": copy.deepcopy(self.rows), "basis_main": self.basis_main, "basis_not": self.basis_not,
                 "rule_not_material": self.rule_not_material, "rule_not_hit": self.rule_not_hit,
-                "rev": self.rev, "updated_at": self.updated_at, "updated_by": self.updated_by}
+                "order": list(self.order), "rev": self.rev, "updated_at": self.updated_at, "updated_by": self.updated_by}
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ConditionSet":
@@ -72,7 +74,8 @@ class ConditionSet:
             rows.append(empty_row())
         return cls(rows=rows, basis_main=d.get("basis_main") or "ｵｰﾀﾞｰ", basis_not=d.get("basis_not") or "ｵｰﾀﾞｰ",
                    rule_not_material=d.get("rule_not_material") or "material",
-                   rule_not_hit=d.get("rule_not_hit") or "skip", rev=int(d.get("rev") or 0),
+                   rule_not_hit=d.get("rule_not_hit") or "skip", order=_order(d.get("order")),
+                   rev=int(d.get("rev") or 0),
                    updated_at=d.get("updated_at") or "", updated_by=d.get("updated_by") or "")
 
     def vba_compatible(self) -> "ConditionSet":
@@ -80,6 +83,19 @@ class ConditionSet:
         c = copy.deepcopy(self)
         c.rule_not_material, c.rule_not_hit = "temper_val", "stop"
         return c
+
+
+def _order(v: Any) -> List[int]:
+    """見る順番を読む。無い・壊れている時は 1〜15 の順。抜けた番号は後ろに足す。"""
+    out: List[int] = []
+    for x in (v or []):
+        try:
+            n = int(x)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= n <= GROUP_COUNT and n not in out:
+            out.append(n)
+    return out + [n for n in range(1, GROUP_COUNT + 1) if n not in out]
 
 
 def empty_row() -> Dict[str, Any]:

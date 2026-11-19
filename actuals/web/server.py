@@ -54,6 +54,7 @@ OPERATIONS = {
     "/api/override": ("手動訂正", ("lot", "grp", "reason")),
     "/api/conditions": ("条件表の保存", ("rev", "note")),
     "/api/conditions/preview": ("条件表の影響の確認", ("y", "m", "cal")),
+    "/api/conditions/try": ("条件表でロットを試す", ("lot",)),
     "/api/export": ("CSV の書き出し", ("kind", "y", "m", "cal", "sel", "fy")),
     "/api/export/open": ("書き出し先を開く", ()),
     "/api/paths/open": ("フォルダを開く", ("path",)),
@@ -485,7 +486,7 @@ def make_handler(app: WebApp):
             if path == "/api/review":
                 return self._json(200, svc.review(_int(q, "y", 0), _int(q, "m", 0), cal))
             if path == "/api/conditions":
-                return self._json(200, svc.conditions())
+                return self._json(200, svc.conditions(_int(q, "y", 0), _int(q, "m", 0), cal))
             if path == "/api/history":
                 return self._json(200, svc.history_summary())
             if path == "/api/rne":
@@ -567,6 +568,9 @@ def make_handler(app: WebApp):
                                                               int(d.get("m") or 0), str(d.get("cal") or "genba")))
             if path == "/api/conditions":
                 return self._json(200, svc.save_conditions(d))
+            if path == "/api/conditions/try":
+                return self._json(200, svc.try_lot(d.get("conditions") or {}, str(d.get("lot") or ""),
+                                                   str(d.get("cal") or "genba")))
             if path == "/api/export":
                 return self._json(200, svc.export(str(d.get("kind")), int(d.get("y") or 0), int(d.get("m") or 0),
                                                   str(d.get("cal") or "genba"), _sel(d.get("sel")),

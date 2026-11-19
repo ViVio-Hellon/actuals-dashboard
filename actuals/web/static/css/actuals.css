@@ -210,3 +210,43 @@ textarea.input { width: 100%; min-height: 120px; font-family: var(--mono); font-
 
 /* 知らせたいカード（この PC に貯めた分など） */
 .card--warn { border-left: 4px solid var(--state-warn, var(--warn-fg)); }
+
+/* 条件表（案 1: 左にグループの一覧 = 見る順番、右に選んだグループの条件） */
+.rules-card .rules { margin: 6px 0 4px; padding-left: 1.4em; line-height: 1.8; }
+.cond-layout { display: grid; grid-template-columns: minmax(420px, 1fr) minmax(520px, 1.25fr); gap: 12px; align-items: start; }
+.cond-list { list-style: none; margin: 0; padding: 0; }
+.cond-item { display: grid; grid-template-columns: 2.2em 1fr auto auto; gap: 8px; align-items: center;
+             padding: 7px 10px; border-bottom: 1px solid var(--rule); cursor: pointer; }
+.cond-item:hover { background: var(--sunken); }
+.cond-item.is-sel { background: var(--info-bg); box-shadow: inset 4px 0 0 var(--state-info); }
+.cond-item--none { cursor: default; color: var(--muted); }
+.cond-item--none:hover { background: none; }
+.cond-item--unused .cond-name { color: var(--muted); font-weight: 400; }
+.cond-sep { padding: 8px 10px 4px; font-size: var(--fs-xs); color: var(--muted); }
+.cond-rank { font-family: var(--mono); font-weight: 700; text-align: center; color: var(--muted); }
+.cond-main { display: flex; flex-direction: column; min-width: 0; }
+.cond-name { font-weight: 700; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.cond-name small { font-weight: 400; color: var(--muted); font-size: var(--fs-xs); }
+.cond-sum { font-size: var(--fs-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cond-count { font-family: var(--mono); font-size: var(--fs-xs); white-space: nowrap; text-align: right; }
+.cond-move { display: flex; gap: 2px; }
+.btn--xs { padding: 0 6px; min-height: 22px; font-size: 11px; }
+.tag--vc { color: var(--shift-1); border-color: var(--shift-1); }
+.tag--warn { color: var(--state-error); border-color: var(--state-error); }
+.cond-edit h4 { margin: 10px 0 2px; font-size: var(--fs-sm); }
+.cond-edit .check { display: inline-flex; gap: 6px; align-items: center; }
+.cond-ranges { width: auto; }
+.cond-ranges th { text-align: left; width: 4em; }
+.cond-ranges td { white-space: nowrap; }
+.cond-ranges .tilde { padding: 0 4px; color: var(--muted); }
+.cond-ranges .op { color: var(--muted); font-size: var(--fs-xs); margin-left: 4px; }
+.input--num { width: 7em; text-align: right; font-family: var(--mono); }
+.input--op { width: auto; margin-left: 4px; }
+.cond-say { margin: 4px 0 0; font-size: var(--fs-sm); color: var(--ink); background: var(--sunken); padding: 6px 10px; border-radius: 4px; }
+#tryOut .ok { color: var(--state-ok); font-weight: 700; }
+#tryOut .ng { color: var(--state-error); font-weight: 700; }
+#tryOut tr.is-sel td { background: var(--info-bg); font-weight: 700; }
+.cond-ranges th, .cond-ranges td { text-align: left !important; }
+#tryOut td, #tryOut th { text-align: left !important; }
+#editor > header { padding: 10px 14px 0; display: flex; gap: 12px; align-items: baseline; }
+#editor > header h3 { margin: 0; }

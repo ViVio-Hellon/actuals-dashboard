@@ -133,8 +133,10 @@ def classify(lot: Lot, cs: ConditionSet, want_trace: bool = False) -> Judge:
     vc = lot.v.get(C.VC)
     vc_on = vba_val(vc) == 1 or v_eq(vc, "01")
 
-    for idx, row in enumerate(cs.rows, start=1):
-        step: Dict[str, Any] = {"row": idx, "name": row.get("name") or ""}
+    # 見る順番（cs.order）の順に見る。番号（idx）はグループの番号のまま
+    for rank, idx in enumerate(cs.order, start=1):
+        row = cs.rows[idx - 1]
+        step: Dict[str, Any] = {"row": idx, "rank": rank, "name": row.get("name") or ""}
         if row.get("not_use") == "*":
             nc = _checks(row, "not_", lot, not_cols, not_mat_value, legacy_mat)
             hit = all(ok for _, ok in nc)
