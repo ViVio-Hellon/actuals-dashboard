@@ -55,6 +55,7 @@ OPERATIONS = {
     "/api/conditions": ("条件表の保存", ("rev", "note")),
     "/api/conditions/preview": ("条件表の影響の確認", ("y", "m", "cal")),
     "/api/conditions/try": ("条件表でロットを試す", ("lot",)),
+    "/api/conditions/export": ("条件表の出力（.sqlite3）", ()),
     "/api/export": ("CSV の書き出し", ("kind", "y", "m", "cal", "sel", "fy")),
     "/api/export/open": ("書き出し先を開く", ()),
     "/api/paths/open": ("フォルダを開く", ("path",)),
@@ -568,6 +569,8 @@ def make_handler(app: WebApp):
                                                               int(d.get("m") or 0), str(d.get("cal") or "genba")))
             if path == "/api/conditions":
                 return self._json(200, svc.save_conditions(d))
+            if path == "/api/conditions/export":
+                return self._json(200, svc.export_conditions())
             if path == "/api/conditions/try":
                 return self._json(200, svc.try_lot(d.get("conditions") or {}, str(d.get("lot") or ""),
                                                    str(d.get("cal") or "genba")))

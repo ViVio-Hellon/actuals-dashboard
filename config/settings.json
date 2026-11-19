@@ -3,6 +3,7 @@
   "symnavi_exe": "C:\\NAVICL\\bin\\SymNavi.exe",
   "symnavi_server": "NlmFaNgyNavd",
   "shared_dir": "",
+  "conditions_export_dir": "",
   "export_dir": "{DATA}/export",
   "log_dir": "",
   "work_dir": "{DATA}/work",

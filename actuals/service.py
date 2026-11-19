@@ -347,6 +347,90 @@ class Service:
         return {"problems": [], "warnings": blank_warnings(new), "changes": changes, "year": y, "month": m,
                 "cal": cal, "counts": self._group_counts(new, y, m, cal)}
 
+    # ---------- 条件表の出力（.sqlite3） ----------
+    COND_EXPORT_NAME = "actualsdashboard_条件表.sqlite3"
+    # (出力の列名, 条件表の列, 種類) 種類: text / num / flag
+    COND_EXPORT_COLUMNS = [
+        ("材質", "mat", "text"), ("製造材質", "mmat", "text"),
+        ("板厚MIN", "t_min", "num"), ("板厚MAX", "t_max", "num"), ("板厚MAX未満", "t_lt", "num"),
+        ("板幅MIN", "w_min", "num"), ("板幅MAX", "w_max", "num"), ("板幅MAX未満", "w_lt", "num"),
+        ("板丈MIN", "l_min", "num"), ("板丈MINより大", "l_gt", "num"), ("板丈MAX", "l_max", "num"),
+        ("板丈MAX未満", "l_lt", "num"),
+        ("単重MIN", "wt_min", "num"), ("単重MAX", "wt_max", "num"), ("単重MAX未満", "wt_lt", "num"),
+    ]
+
+    def export_conditions(self) -> Dict[str, Any]:
+        """条件表を「条件表の出力先」に .sqlite3 で書く（ほかのツール・Access から読むため）。未設定なら書かない。
+
+        表「条件表」: 1 行 1 グループ（見る順番の順。名前のあるグループだけ）。空（NULL）は条件なし。
+        旧シートの空欄（0 として比べる）は 0 で書く（このツールの判定と同じ意味になるように）。
+        表「情報」: 版・保存日時・保存した人・寸法の基準・判定方式・決まり方。
+        """
+        import sqlite3
+        s = self.conf()
+        folder_text = (s.get("conditions_export_dir") or "").strip()
+        if not folder_text:
+            return {"written": False, "message": "条件表の出力先が未設定です（パスの設定 ③）。"}
+        folder = Path(folder_text)
+        cs = self.master.conditions()
+        t0 = time.monotonic()
+
+        def cell(v: Any, kind: str) -> Any:
+            if v == "*":
+                return None
+            if v is None or v == "":
+                return 0 if kind == "num" else None
+            return v
+
+        cols = ["見る順番", "番号", "グループ名", "VC優先"] + [c for c, _, _ in self.COND_EXPORT_COLUMNS] \
+            + ["除外を使う"] + [f"除外_{c}" for c, _, _ in self.COND_EXPORT_COLUMNS]
+        rows = []
+        rank = 0
+        for no in cs.order:
+            r = cs.rows[no - 1]
+            if not r.get("name"):
+                continue
+            rank += 1
+            use_not = r.get("not_use") == "*"
+            rows.append([rank, no, str(r["name"]), 1 if r.get("vc") == "*" else 0]
+                        + [cell(r.get(k), kd) for _, k, kd in self.COND_EXPORT_COLUMNS]
+                        + [1 if use_not else 0]
+                        + [cell(r.get("not_" + k), kd) if use_not else None for _, k, kd in self.COND_EXPORT_COLUMNS])
+        info = [("版", str(cs.rev)), ("保存日時", cs.updated_at), ("保存した人", cs.updated_by),
+                ("寸法の基準", cs.basis_main), ("除外の寸法の基準", cs.basis_not),
+                ("除外の材質", RULE_NOT_MATERIAL[cs.rule_not_material]), ("除外に当たったら", RULE_NOT_HIT[cs.rule_not_hit]),
+                ("出力日時", datetime.now().strftime("%Y-%m-%d %H:%M:%S")), ("出力した PC", who()["pc"]),
+                ("決まり方", "見る順番の順に見て、最初に当てはまったグループに入る。VC 付きのロットは VC優先=1 のグループに"
+                             "当てはまればそちらを優先。除外を使う=1 のグループは、除外_ の条件に全部当てはまるロットを入れない。"
+                             "空（NULL）は条件なし。MIN・MAX は両端を含む（MINより大・MAX未満は含まない）。"
+                             "材質はカンマ区切り・末尾 * で前方一致。寸法は「寸法の基準」の値、製造材質・単重は製造の値で比べる。")]
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            final = folder / self.COND_EXPORT_NAME
+            tmp = folder / f".{self.COND_EXPORT_NAME}.{os.getpid()}.tmp"
+            if tmp.exists():
+                tmp.unlink()
+            con = sqlite3.connect(str(tmp))
+            try:
+                q = lambda c: '"' + c.replace('"', '""') + '"'  # noqa: E731
+                types = ["INTEGER", "INTEGER", "TEXT", "INTEGER"] + \
+                    ["TEXT" if kd == "text" else "REAL" for _, _, kd in self.COND_EXPORT_COLUMNS] + ["INTEGER"] + \
+                    ["TEXT" if kd == "text" else "REAL" for _, _, kd in self.COND_EXPORT_COLUMNS]
+                con.execute(f'CREATE TABLE "条件表" ({", ".join(f"{q(c)} {t}" for c, t in zip(cols, types))})')
+                con.executemany(f'INSERT INTO "条件表" VALUES ({",".join("?" * len(cols))})', rows)
+                con.execute('CREATE TABLE "情報" ("項目" TEXT PRIMARY KEY, "値" TEXT)')
+                con.executemany('INSERT INTO "情報" VALUES (?, ?)', info)
+                con.commit()
+            finally:
+                con.close()
+            os.replace(tmp, final)
+        except (OSError, sqlite3.Error) as e:
+            log.warning("条件表を出力できません（保存は済んでいます）: %s（%s）", folder, e)
+            return {"written": False, "message": f"条件表を出力できません: {folder}（{e}）。"
+                                                 "ファイルを開いている人がいないか、書き込みの権限を確かめてください。"}
+        logsetup.saved("条件表の出力（.sqlite3）", final, len(rows), time.monotonic() - t0)
+        return {"written": True, "path": str(final), "rows": len(rows)}
+
     def save_conditions(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         cs = self._parse_conditions(payload)
         try:
@@ -355,7 +439,9 @@ class Service:
             raise UserError("\n".join(e.problems))
         self._cache.clear()
         log.info("条件表を保存しました（rev %d）", new.rev)
-        return self.conditions()
+        out = self.conditions()
+        out["exported"] = self.export_conditions()          # 出力先があれば書き直す（書けなくても保存は済んでいる）
+        return out
 
     # ---------- 取り込み ----------
     def import_sqlite(self, path: str) -> Dict[str, Any]:

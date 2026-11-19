@@ -210,7 +210,8 @@ def check_log(value: str, paths: Paths) -> Dict[str, Any]:
 def check_all(values: Dict[str, Any], paths: Paths) -> Dict[str, Any]:
     from . import credentials
     v = {k: str(values.get(k) if values.get(k) is not None else "") for k in (
-        "shared_dir", "rne_path", "symnavi_exe", "symnavi_server", "export_dir", "log_dir", "work_dir", "cscript_path")}
+        "shared_dir", "rne_path", "symnavi_exe", "symnavi_server", "export_dir", "conditions_export_dir", "log_dir",
+        "work_dir", "cscript_path")}
     cred = credentials.status(paths)
     return {
         "rne_path": check_rne(v["rne_path"], paths),
@@ -222,6 +223,8 @@ def check_all(values: Dict[str, Any], paths: Paths) -> Dict[str, Any]:
         "credentials": (_item("ok", f"登録済み（ID {cred['id']}・{cred['source']}）。") if cred["ready"]
                         else _item("missing", "未登録です。下の「SymNavi のログイン」で ID とパスワードを登録してください。")),
         "shared_dir": check_shared(v["shared_dir"], paths),
+        "conditions_export_dir": _writable(Path(expand(v["conditions_export_dir"], paths)), create=True)
+        if v["conditions_export_dir"] else _item("ok", "未設定のため、条件表は出力しません。"),
         "export_dir": _writable(Path(expand(v["export_dir"], paths)), create=True) if v["export_dir"]
         else _item("missing", "未設定です。"),
         "log_dir": check_log(v["log_dir"], paths),

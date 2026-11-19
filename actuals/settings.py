@@ -92,6 +92,10 @@ EDITABLE: List[Tuple[str, str, str, str, str]] = [
     ("shared_dir", "store", "共有フォルダ",
      "取り込んだ倉入実績（月ごとに蓄積）・グループの条件表・手動訂正を置く。全 PC で同じ場所にすると、"
      "全員が同じ集計を見る（どの PC で「データ更新」しても全員に反映）。空欄ならこの PC の中だけに保存（試用）。", "dir"),
+    ("conditions_export_dir", "output", "条件表の出力先",
+     "条件表（グループの条件・見る順番）を actualsdashboard_条件表.sqlite3 として書き出すフォルダ。"
+     "条件表を保存するたびに書き直す（条件表の画面の「出力」でも書ける）。ほかのツールや Access から読むためのもので、"
+     "このツールはここを読まない。空欄なら出力しない。", "dir"),
     ("export_dir", "output", "CSV の書き出し先",
      "月の集計・明細・年の集計の「CSV に」ボタンで書くフォルダ。", "dir"),
     ("log_dir", "output", "ログの出力パス",
@@ -131,7 +135,7 @@ def is_full_path(text: str) -> bool:
 # 入っていない項目の値（ツールの config/settings.json に書かれていなければこれ）
 DEFAULTS: Dict[str, Any] = {
     "rne_path": "", "symnavi_exe": "C:\\NAVICL\\bin\\SymNavi.exe", "symnavi_server": "NlmFaNgyNavd",
-    "shared_dir": "", "export_dir": "{DATA}/export", "log_dir": "", "work_dir": "{DATA}/work",
+    "shared_dir": "", "conditions_export_dir": "", "export_dir": "{DATA}/export", "log_dir": "", "work_dir": "{DATA}/work",
     "startup_wait_sec": 20, "result_wait_sec": 120, "cscript_path": "C:\\Windows\\System32\\cscript.exe",
     "lock_wait_sec": 10, "log_keep_days": 90,
 }
@@ -180,7 +184,8 @@ class Settings:
     def resolved(self) -> Dict[str, Any]:
         s = self.load()
         out = copy.deepcopy(s)
-        for k in ("shared_dir", "rne_path", "symnavi_exe", "export_dir", "log_dir", "work_dir", "cscript_path"):
+        for k in ("shared_dir", "rne_path", "symnavi_exe", "export_dir", "conditions_export_dir", "log_dir", "work_dir",
+                  "cscript_path"):
             out[k] = expand(s.get(k, ""), self.paths)
         out["shared_configured"] = bool(out["shared_dir"])
         if not out["shared_dir"]:

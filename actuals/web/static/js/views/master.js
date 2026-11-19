@@ -122,6 +122,7 @@ export async function render(main, ctx, stale) {
       <span class="note">版 ${cs.rev}・${esc(cs.updated_at)} ${esc(cs.updated_by)}（全 PC 共通）</span>
       <span class="grow"></span>
       <button class="btn" type="button" id="preview">影響を確認（${ymLabel(y, m)}）</button>
+      <button class="btn" type="button" id="exportCond" title="条件表を「パスの設定」の出力先に .sqlite3 で書く（保存するたびにも書く）">出力（.sqlite3）</button>
       <button class="btn btn--commit" type="button" id="saveCond">保存</button>
     </div>
     <section class="card rules-card"><div class="pad">
@@ -335,14 +336,25 @@ export async function render(main, ctx, stale) {
         <tbody>${rows}</tbody></table></div>`;
     } catch (e) { toastError(e); }
   });
+  $("#exportCond").addEventListener("click", async () => {
+    if (ctx.dirty && !(await confirmBox("まだ保存していない変更があります。出力するのは保存済みの条件表です。出力しますか？", { ok: "出力" }))) return;
+    try {
+      const r = await api.post("/api/conditions/export", {}, "出力しています…");
+      if (r.written) toast(`条件表を出力しました（${r.rows} グループ）: ${r.path}`, "ok");
+      else toast(r.message, "warn", { label: "パスの設定へ", onClick: () => { location.hash = "#settings"; } });
+    } catch (e) { toastError(e); }
+  });
   $("#tryLot").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#tryGo").click(); });
 
   $("#saveCond").addEventListener("click", async () => {
     if (!(await confirmBox("条件表を保存します。全 PC の集計に効きます（過去の月も、この条件で数え直します）。", { ok: "保存" }))) return;
     try {
-      await api.post("/api/conditions", { ...collect(), note: "画面から保存" }, "保存しています…");
+      const r = await api.post("/api/conditions", { ...collect(), note: "画面から保存" }, "保存しています…");
       ctx.dirty = false;
       toast("条件表を保存しました。", "ok");
+      const ex = r.exported || {};
+      if (ex.written) toast(`条件表を出力しました: ${ex.path}`, "ok");
+      else if (ex.path === undefined && ex.message && !ex.message.includes("未設定")) toast(ex.message, "warn");
       await ctx.reloadState();
       ctx.refresh();
     } catch (e) {
