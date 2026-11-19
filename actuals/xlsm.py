@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from xml.etree import ElementTree as ET
 
 from . import columns as C
-from .conditions import FIELD_KEYS, ConditionSet, empty_row
+from .conditions import FIELD_KEYS, LEGACY_KEYS, ConditionSet, empty_row
 
 NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
       "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
@@ -153,7 +153,7 @@ def read_conditions(wb: Workbook, sheet: str = "設定") -> ConditionSet:
     rows = []
     for r in range(5, 20):
         row = empty_row()
-        for i, key in enumerate(FIELD_KEYS):
+        for i, key in enumerate(LEGACY_KEYS):
             v = wb.value(sheet, r, 3 + i)       # C 列から W 列
             row[key] = v if v != "" else None
         rows.append(row)

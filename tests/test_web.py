@@ -84,7 +84,8 @@ class WebTest(unittest.TestCase):
         """判定方式を旧 VBA と同じにすると、月集計が受領ブックと一致する（手動訂正も移す）。"""
         code, cond = self.call("/api/conditions")
         c = cond["conditions"]
-        c.update({"rule_not_material": "temper_val", "rule_not_hit": "stop"})
+        c.update({"rows": self.g["conditions"]["rows"],                  # 受領ブックの設定シートの条件で
+                  "rule_not_material": "temper_val", "rule_not_hit": "stop"})
         code, _ = self.call("/api/conditions", c)
         self.assertEqual(code, 200)
         for lot, grp in self.g["overrides"].items():

@@ -28,8 +28,11 @@ class GoldenVbaCompatible(unittest.TestCase):
         cls.exp = cls.g["expected"]
 
     def test_conditions_match_default(self):
-        """初期値として持っている条件表が、受領ブックの設定シートと同じ。"""
-        self.assertEqual(default_conditions().rows, ConditionSet.from_dict(self.g["conditions"]).rows)
+        """旧シートとして持っている条件表が、受領ブックの設定シートと同じ（初期値は設備仕様に入れ替えた。下の試験）。"""
+        from actuals.conditions import vba_sheet_conditions
+        self.assertEqual(vba_sheet_conditions().rows, ConditionSet.from_dict(self.g["conditions"]).rows)
+        d = default_conditions()
+        self.assertEqual([r["name"] for r in d.rows], [r["name"] for r in vba_sheet_conditions().rows])
 
     def test_per_lot(self):
         """修正シート: 自動グループ・計算単重・枚数・直・年月日（987 行）。"""

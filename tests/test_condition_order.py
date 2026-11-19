@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from actuals.conditions import ConditionSet, default_conditions
+from actuals.conditions import ConditionSet, vba_sheet_conditions as default_conditions
 from actuals.engine import classify, compute_lot
 from actuals.service import Service, UserError
 from actuals.settings import Paths
@@ -49,6 +49,9 @@ class Screen(unittest.TestCase):
         self.svc = Service(Paths(home))
         self.g = golden()
         self.svc.import_rows(self.g["header"], _rows(self.g), "paste", "t")
+        old = self.svc.master.conditions()                                    # 受領ブックの設定シートの条件で試す
+        d = ConditionSet.from_dict({**old.to_dict(), "rows": self.g["conditions"]["rows"]})
+        self.svc.master.save_conditions(d, old.rev)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)

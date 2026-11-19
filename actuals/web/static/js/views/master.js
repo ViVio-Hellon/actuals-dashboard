@@ -18,12 +18,14 @@ import { $, esc, kg, n0, ymLabel } from "../util.js";
 let draft = null;
 let selected = 1;
 
+// lo/hi は旧シートの列（以上・以下）、gt/lt は足した比べ方（より大きい・未満）
 const RANGES = [
-  { label: "板厚", unit: "mm", lo: "t_min", hi: "t_max" },
-  { label: "板幅", unit: "mm", lo: "w_min", hi: "w_max" },
-  { label: "板丈", unit: "mm", lo: "l_min", gt: "l_gt", hi: "l_max" },
-  { label: "単重", unit: "kg", hi: "wt_max" },
+  { label: "板厚", unit: "mm", lo: "t_min", hi: "t_max", lt: "t_lt" },
+  { label: "板幅", unit: "mm", lo: "w_min", hi: "w_max", lt: "w_lt" },
+  { label: "板丈", unit: "mm", lo: "l_min", gt: "l_gt", hi: "l_max", lt: "l_lt" },
+  { label: "単重", unit: "kg", lo: "wt_min", hi: "wt_max", lt: "wt_lt" },
 ];
+const NEW_KEYS = new Set(["mmat", "wt_min", "t_lt", "w_lt", "l_lt", "wt_lt"]);
 
 const isStar = (v) => v === "*";
 const isBlank = (v) => v === null || v === undefined || v === "";
@@ -56,16 +58,26 @@ function lowerOf(r, rg, p = "") {
   return { v: rg.lo ? r[p + rg.lo] : "*", op: "ge" };
 }
 
+/** 上限の値と比べ方（以下 / 未満） */
+function upperOf(r, rg, p = "") {
+  const lt = r[p + rg.lt];
+  if (rg.lt && !isStar(lt) && !isBlank(lt) && (isStar(r[p + rg.hi]) || isBlank(r[p + rg.hi]))) return { v: lt, op: "lt" };
+  return { v: r[p + rg.hi], op: "le" };
+}
+
 /** 1 グループの条件を文で（一覧とカードの見出し） */
 function sentence(r, p = "") {
   const parts = [];
   const mat = r[p + "mat"];
   parts.push(isStar(mat) ? "材質どれでも" : `材質 ${isBlank(mat) ? "（空欄）" : mat}`);
+  const mm = r[p + "mmat"];
+  if (!isStar(mm) && !isBlank(mm)) parts.push(`製造材質 ${mm}`);
   for (const rg of RANGES) {
-    const lo = rg.lo || rg.gt ? lowerOf(r, rg, p) : { v: "*", op: "ge" };
-    const hi = r[p + rg.hi];
-    const l = isStar(lo.v) ? "" : `${toInput(lo.v)}${lo.op === "gt" ? "超" : ""}`;
-    const h = isStar(hi) ? "" : toInput(hi);
+    const lo = lowerOf(r, rg, p);
+    const up = upperOf(r, rg, p);
+    const zl = !(rg.lo && NEW_KEYS.has(rg.lo));
+    const l = isStar(lo.v) || (isBlank(lo.v) && !zl) ? "" : `${toInput(lo.v)}${lo.op === "gt" ? "超" : ""}`;
+    const h = isStar(up.v) ? "" : `${toInput(up.v)}${up.op === "lt" ? "未満" : ""}`;
     if (l || h) parts.push(`${rg.label} ${l}〜${h}`);
   }
   return parts.join("・");
@@ -75,15 +87,16 @@ function sentence(r, p = "") {
 function rowWarnings(r, p = "") {
   const out = [];
   for (const rg of RANGES) {
-    const lo = rg.lo || rg.gt ? lowerOf(r, rg, p) : { v: "*" };
-    const a = num(lo.v), b = num(r[p + rg.hi]);
-    if (a !== null && b !== null && !isStar(lo.v) && !isStar(r[p + rg.hi]) && a > b) {
+    const lo = lowerOf(r, rg, p);
+    const up = upperOf(r, rg, p);
+    const a = num(lo.v), b = num(up.v);
+    if (a !== null && b !== null && !isStar(lo.v) && !isStar(up.v) && !isBlank(lo.v) && (a > b || (a === b && up.op === "lt"))) {
       out.push(`${p ? "除外の" : ""}${rg.label}の下限（${a}）が上限（${b}）より大きいので、${p ? "何も除外しません" : "このグループには入りません"}。`);
     }
   }
   if (!p) {
     for (const rg of RANGES) {
-      if (isBlank(r[rg.hi]) && named(r)) out.push(`${rg.label}の上限が 0（旧シートの空欄）です。このグループにはほぼ入りません。条件なしにするなら空欄にしてください。`);
+      if (isBlank(r[rg.hi]) && upperOf(r, rg).op === "le" && named(r)) out.push(`${rg.label}の上限が 0（旧シートの空欄）です。このグループにはほぼ入りません。条件なしにするなら空欄にしてください。`);
     }
   }
   return out;
@@ -140,6 +153,8 @@ export async function render(main, ctx, stale) {
       <div class="formrow"><b>除外の材質</b>${radio("ruleMat", v.rule_not_material, cs.rule_not_material)}</div>
       <div class="formrow"><b>除外に当たったら</b>${radio("ruleHit", v.rule_not_hit, cs.rule_not_hit)}</div>
       <p class="note">旧 VBA と同じ判定に戻すのは、旧ツールと突き合わせる時だけにしてください（旧 VBA の誤りまで戻ります）。</p>
+      <div class="formrow"><button class="btn btn--sm" type="button" id="useSpec">設備仕様の条件を入れる（${Object.keys(v.equipment || {}).map((g) => esc(v.equipment[g].name)).join("・")}）</button>
+        <span class="note">梱包のデータベースの「設備仕様」表の値を、その番号のグループに入れます（保存はまだしません。「影響を確認」してから保存）。</span></div>
     </div></details>
     <section class="card"><header><h3>保存の記録</h3></header><div class="pad pad--flush"><div class="tablewrap tablewrap--mid">
       <table class="table table--dense"><thead><tr><th>日時</th><th>保存した人</th><th>版</th><th>メモ</th></tr></thead>
@@ -198,13 +213,15 @@ export async function render(main, ctx, stale) {
 
   function rangeRows(r, p) {
     return RANGES.map((rg) => {
-      const lo = rg.lo || rg.gt ? lowerOf(r, rg, p) : null;
+      const lo = lowerOf(r, rg, p), up = upperOf(r, rg, p);
       const z = p ? r.not_use === "*" : true;      // 旧シートの空欄（0 として比べる）を 0 と見せるか
-      const loInput = lo ? `<input class="input input--num" data-lo="${rg.label}" data-p="${p}" value="${esc(toInput(lo.v, z))}" placeholder="なし">
-          ${rg.gt ? `<select class="input input--op" data-op="${rg.label}" data-p="${p}"><option value="ge" ${lo.op === "ge" ? "selected" : ""}>以上</option><option value="gt" ${lo.op === "gt" ? "selected" : ""}>より大きい</option></select>` : '<span class="op">以上</span>'}`
-        : '<span class="note">—</span>';
-      return `<tr><th>${rg.label}</th><td>${loInput}</td><td class="tilde">〜</td>
-        <td><input class="input input--num" data-hi="${rg.label}" data-p="${p}" value="${esc(toInput(r[p + rg.hi], z))}" placeholder="なし"> <span class="op">以下</span></td>
+      const zl = z && !NEW_KEYS.has(rg.lo);
+      return `<tr><th>${rg.label}</th>
+        <td><input class="input input--num" data-lo="${rg.label}" data-p="${p}" value="${esc(toInput(lo.v, zl))}" placeholder="なし">
+          ${rg.gt ? `<select class="input input--op" data-op="${rg.label}" data-p="${p}"><option value="ge" ${lo.op === "ge" ? "selected" : ""}>以上</option><option value="gt" ${lo.op === "gt" ? "selected" : ""}>より大きい</option></select>` : '<span class="op">以上</span>'}</td>
+        <td class="tilde">〜</td>
+        <td><input class="input input--num" data-hi="${rg.label}" data-p="${p}" value="${esc(toInput(up.v, z && up.op === "le"))}" placeholder="なし">
+          <select class="input input--op" data-hop="${rg.label}" data-p="${p}"><option value="le" ${up.op === "le" ? "selected" : ""}>以下</option><option value="lt" ${up.op === "lt" ? "selected" : ""}>未満</option></select></td>
         <td class="note">${rg.unit}</td></tr>`;
     }).join("");
   }
@@ -220,14 +237,16 @@ export async function render(main, ctx, stale) {
           <label class="check"><input type="checkbox" id="eVc" ${r.vc === "*" ? "checked" : ""}> VC 付きのロットはこのグループを優先</label></div>
         <p class="note">${r.vc === "*" ? "VC 付きのロットは、ここに当てはまれば、上のグループより優先してここに入ります。VC の無いロットも、上に当てはまらなければここに入ります。" : "上から順に見て、最初に当てはまればここに入ります。"}</p>
         <h4>当てはまる条件</h4>
-        <div class="formrow"><label>材質 <input class="input" id="eMat" value="${esc(isStar(r.mat) ? "" : (r.mat ?? ""))}" placeholder="どれでも" style="width:8em"></label>
-          <span class="note">空欄はどれでも。1 つだけ指定できます（例 3SR・532H）。</span></div>
+        <div class="formrow"><label>材質（${esc($("#basisMain") ? $("#basisMain").value : cs.basis_main)}） <input class="input" id="eMat" value="${esc(isStar(r.mat) ? "" : (r.mat ?? ""))}" placeholder="どれでも" style="width:10em"></label>
+          <label>製造材質 <input class="input" id="eMmat" value="${esc(isStar(r.mmat) || isBlank(r.mmat) ? "" : r.mmat)}" placeholder="どれでも" style="width:16em"></label></div>
+        <p class="note">空欄はどれでも。カンマで区切って並べられ、末尾の * は「…で始まる」（例 3N*,1070）。寸法は${esc(cs.basis_main)}の値で比べます。</p>
         <table class="table table--dense cond-ranges"><tbody>${rangeRows(r, "")}</tbody></table>
         <p class="cond-say">→ ${esc(sentence(r))} のロット</p>
         <h4><label class="check"><input type="checkbox" id="eNot" ${r.not_use === "*" ? "checked" : ""}> 除外する範囲を使う</label></h4>
         <div id="notBox" ${r.not_use === "*" ? "" : "hidden"}>
           <p class="note">上の条件に当てはまっても、ここに<b>全部</b>当てはまるロットはこのグループに入れません（次のグループを見ます）。</p>
-          <div class="formrow"><label>材質 <input class="input" id="eNotMat" value="${esc(isStar(r.not_mat) || isBlank(r.not_mat) ? "" : r.not_mat)}" placeholder="どれでも" style="width:8em"></label></div>
+          <div class="formrow"><label>材質 <input class="input" id="eNotMat" value="${esc(isStar(r.not_mat) || isBlank(r.not_mat) ? "" : r.not_mat)}" placeholder="どれでも" style="width:10em"></label>
+            <label>製造材質 <input class="input" id="eNotMmat" value="${esc(isStar(r.not_mmat) || isBlank(r.not_mmat) ? "" : r.not_mmat)}" placeholder="どれでも" style="width:16em"></label></div>
           <table class="table table--dense cond-ranges"><tbody>${rangeRows(r, "not_")}</tbody></table>
           <p class="cond-say">→ ${esc(sentence(r, "not_"))} のロットは除外</p>
         </div>
@@ -239,12 +258,17 @@ export async function render(main, ctx, stale) {
     $("#eMat").addEventListener("change", (e) => { set("mat", fromInput(e.target.value)); drawEditor(); });
     $("#eNot").addEventListener("change", (e) => { set("not_use", e.target.checked ? "*" : null); drawEditor(); });
     $("#eNotMat").addEventListener("change", (e) => { set("not_mat", fromInput(e.target.value)); drawEditor(); });
-    for (const inp of $("#editor").querySelectorAll("[data-hi]")) {
-      inp.addEventListener("change", () => {
-        const rg = RANGES.find((x) => x.label === inp.dataset.hi);
-        set(inp.dataset.p + rg.hi, fromInput(inp.value)); drawEditor();
-      });
-    }
+    $("#eMmat").addEventListener("change", (e) => { set("mmat", fromInput(e.target.value)); drawEditor(); });
+    $("#eNotMmat").addEventListener("change", (e) => { set("not_mmat", fromInput(e.target.value)); drawEditor(); });
+    const setUpper = (label, p) => {
+      const rg = RANGES.find((x) => x.label === label);
+      const val = fromInput($(`#editor [data-hi="${label}"][data-p="${p}"]`).value);
+      const op = $(`#editor [data-hop="${label}"][data-p="${p}"]`).value;
+      if (op === "lt") { r[p + rg.lt] = val; r[p + rg.hi] = "*"; } else { r[p + rg.hi] = val; r[p + rg.lt] = "*"; }
+      changed(); drawList(); drawEditor();
+    };
+    for (const inp of $("#editor").querySelectorAll("[data-hi]")) inp.addEventListener("change", () => setUpper(inp.dataset.hi, inp.dataset.p));
+    for (const sl of $("#editor").querySelectorAll("[data-hop]")) sl.addEventListener("change", () => setUpper(sl.dataset.hop, sl.dataset.p));
     const setLower = (label, p) => {
       const rg = RANGES.find((x) => x.label === label);
       const val = fromInput($(`#editor [data-lo="${label}"][data-p="${p}"]`).value);
@@ -267,6 +291,11 @@ export async function render(main, ctx, stale) {
 
   drawList();
   drawEditor();
+  $("#useSpec").addEventListener("click", () => {
+    for (const [g, row] of Object.entries(v.equipment || {})) draft.rows[Number(g) - 1] = JSON.parse(JSON.stringify(row));
+    changed(); drawList(); drawEditor();
+    toast("設備仕様の条件を入れました（まだ保存していません）。「影響を確認」で変わるロットを見てから保存してください。", "ok");
+  });
 
   $("#preview").addEventListener("click", async () => {
     try {

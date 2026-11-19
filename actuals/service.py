@@ -311,7 +311,10 @@ class Service:
 
     def conditions(self, y: int = 0, m: int = 0, cal: str = "genba") -> Dict[str, Any]:
         cs = self.master.conditions()
+        from .conditions import EQUIPMENT_SPEC, default_conditions
+        d = default_conditions()
         return {"conditions": cs.to_dict(), "counts": self._group_counts(cs, y, m, cal),
+                "equipment": {str(no): d.rows[no - 1] for no in EQUIPMENT_SPEC},
                 "fields": [{"key": k, "col": c, "label": lb, "kind": kd} for k, c, lb, kd in FIELDS],
                 "rule_not_material": RULE_NOT_MATERIAL, "rule_not_hit": RULE_NOT_HIT,
                 "warnings": blank_warnings(cs),

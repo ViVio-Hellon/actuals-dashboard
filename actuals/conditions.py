@@ -37,8 +37,24 @@ FIELDS: List[Tuple[str, str, str, str]] = [
     ("not_l_gt", "U", "NOT 板丈 MIN＜", "num"),
     ("not_l_max", "V", "NOT 板丈 ≦MAX", "num"),
     ("not_wt_max", "W", "NOT 単重 ≦MAX", "num"),
+    # ---- ここから後は旧シートに無い列（設備仕様の条件を入れるために足した。2026-11）----
+    # 空の時は「条件なし」（旧シートの空欄＝0 とは違う）。旧ツールの条件表には入っていないので、結果は変わらない
+    ("mmat", "", "製造材質", "mat"),          # 寸法の基準にかかわらず製造材質で比べる。カンマ区切り・末尾 * で前方一致
+    ("wt_min", "", "単重 MIN≦", "num"),
+    ("t_lt", "", "板厚 ＜MAX", "num"),        # 上限を「未満」で比べる（板丈の MIN＜ と同じ考え）
+    ("w_lt", "", "板幅 ＜MAX", "num"),
+    ("l_lt", "", "板丈 ＜MAX", "num"),
+    ("wt_lt", "", "単重 ＜MAX", "num"),
+    ("not_mmat", "", "NOT 製造材質", "mat"),
+    ("not_wt_min", "", "NOT 単重 MIN≦", "num"),
+    ("not_t_lt", "", "NOT 板厚 ＜MAX", "num"),
+    ("not_w_lt", "", "NOT 板幅 ＜MAX", "num"),
+    ("not_l_lt", "", "NOT 板丈 ＜MAX", "num"),
+    ("not_wt_lt", "", "NOT 単重 ＜MAX", "num"),
 ]
 FIELD_KEYS = [f[0] for f in FIELDS]
+LEGACY_KEYS = FIELD_KEYS[:21]                 # 旧シートの C〜W 列
+NEW_KEYS = FIELD_KEYS[21:]                    # 足した列（空は「条件なし」）
 FIELD_KIND = {f[0]: f[3] for f in FIELDS}
 
 # 判定方式。既定は「修正版」（2026-10 業務確認: NOT 条件の扱いは VBA 側の誤り）
@@ -99,13 +115,18 @@ def _order(v: Any) -> List[int]:
 
 
 def empty_row() -> Dict[str, Any]:
-    return {k: None for k in FIELD_KEYS}
+    row: Dict[str, Any] = {k: None for k in LEGACY_KEYS}
+    row.update({k: "*" for k in NEW_KEYS})
+    return row
 
 
 def normalize_row(r: Dict[str, Any]) -> Dict[str, Any]:
     out = empty_row()
     for k in FIELD_KEYS:
-        out[k] = r.get(k)
+        v = r.get(k)
+        if k in NEW_KEYS and (v is None or v == ""):
+            v = "*"                       # 足した列の空は「条件なし」（前の版の保存には無い）
+        out[k] = v
     return out
 
 
@@ -191,11 +212,40 @@ _DEFAULT_SHEET = [
 ]
 
 
-def default_conditions() -> ConditionSet:
+def vba_sheet_conditions() -> ConditionSet:
+    """受領ブックの設定シートそのまま（旧ツールの条件。試験・照合用）。"""
     rows = []
     for vals in _DEFAULT_SHEET:
         r = empty_row()
-        for k, v in zip(FIELD_KEYS, vals):
+        for k, v in zip(LEGACY_KEYS, vals):
             r[k] = v
         rows.append(r)
     return ConditionSet(rows=rows)
+
+
+# 設備仕様（梱包のデータベースの「設備仕様」表）。寸法はオーダー、材質は製造材質。両端を含む
+# LVC の 1 行目（特定の製造材質は板厚 1.5 以上）は、「除外する範囲: その製造材質で 板厚 1.5 未満」で表す
+LVC_THIN_MATERIALS = "-99*,3N*,4N*,5N*,F9*,A2ST,A995,E995,G995,NK01,U2ST,1070,2ST,9985"
+EQUIPMENT_SPEC: Dict[int, Dict[str, Any]] = {
+    6: {"name": "ﾄｯﾄ", "vc": None, "mat": "*", "t_min": 0.1, "t_max": 5, "w_min": 840, "w_max": 1650,
+        "l_min": 2440, "l_gt": "*", "l_max": 4100, "wt_min": 0, "wt_max": 80, "not_use": None},
+    11: {"name": "SVC", "vc": "*", "mat": "*", "t_min": 0.6, "t_max": 4, "w_min": 400, "w_max": 1250,
+         "l_min": 830, "l_gt": "*", "l_max": 2500, "wt_min": 0, "wt_max": 30, "not_use": None},
+    12: {"name": "LVC", "vc": "*", "mat": "*", "t_min": 1, "t_max": 20, "w_min": 730, "w_max": 1740,
+         "l_min": 1500, "l_gt": "*", "l_max": 5000, "wt_min": 0, "wt_max": 265,
+         "not_use": "*", "not_mat": "*", "not_mmat": LVC_THIN_MATERIALS, "not_t_min": "*", "not_t_max": "*",
+         "not_t_lt": 1.5, "not_w_min": "*", "not_w_max": "*", "not_l_min": "*", "not_l_gt": "*", "not_l_max": "*",
+         "not_wt_max": "*"},
+    13: {"name": "HVC", "vc": "*", "mat": "*", "t_min": 8, "t_max": 200, "w_min": 800, "w_max": 1900,
+         "l_min": 1300, "l_gt": "*", "l_max": 3500, "wt_min": 0, "wt_max": 2000, "not_use": None},
+}
+
+
+def default_conditions() -> ConditionSet:
+    """初期値: 受領ブックの設定シート ＋ 設備仕様（ﾄｯﾄ・SVC・LVC・HVC は設備仕様の条件に入れ替え）。"""
+    cs = vba_sheet_conditions()
+    for no, spec in EQUIPMENT_SPEC.items():
+        row = empty_row()
+        row.update(spec)
+        cs.rows[no - 1] = row
+    return cs

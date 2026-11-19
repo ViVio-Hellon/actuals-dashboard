@@ -96,6 +96,31 @@ def _star(x: Any) -> bool:
     return x == "*"
 
 
+def mat_match(cond: Any, value: Any) -> bool:
+    """材質の条件。旧シートと同じ 1 つの値（VBA の比べ方）に加え、カンマ区切りの並びと末尾 * の前方一致
+    （設備仕様の「-99*,3N*,1070」の形）を受ける。旧シートの値にはカンマも末尾 * も無いので、結果は変わらない。"""
+    if _star(cond):
+        return True
+    if isinstance(cond, str) and ("," in cond or "、" in cond or (cond.endswith("*") and len(cond) > 1)):
+        text = "" if value is None else (format(value, "g") if isinstance(value, float) else str(value)).strip()
+        for part in cond.replace("、", ",").split(","):
+            p = part.strip()
+            if not p:
+                continue
+            if p.endswith("*") and text.startswith(p[:-1]):
+                return True
+            if not p.endswith("*") and v_eq(p, text):
+                return True
+        return False
+    return v_eq(cond, value)
+
+
+def _new(row: Dict[str, Any], key: str) -> Any:
+    """足した列の値。空は「条件なし」。"""
+    v = row.get(key)
+    return "*" if v is None or v == "" else v
+
+
 def _checks(row: Dict[str, Any], prefix: str, lot: Lot, cols: Dict[str, str], mat_value: Any,
             mat_by_val: bool) -> List[Tuple[str, bool]]:
     """1 行ぶんの条件（材質・板厚・板幅・板丈・単重）を個別に評価する（旧 VBA の入れ子の If と同じ比較）。"""
@@ -103,18 +128,26 @@ def _checks(row: Dict[str, Any], prefix: str, lot: Lot, cols: Dict[str, str], ma
     t = vba_val(lot.v.get(cols["t"]))
     w = vba_val(lot.v.get(cols["w"]))
     ln = vba_val(lot.v.get(cols["l"]))
+    n = lambda k: _new(row, prefix + k)  # noqa: E731   足した列（空は条件なし）
+    lt = lambda k, x: _star(n(k)) or v_lt(x, n(k))  # noqa: E731   上限「未満」
     if mat_by_val:
         mat_ok = _star(g("mat")) or v_eq(g("mat"), vba_val(mat_value))
     else:
-        mat_ok = _star(g("mat")) or v_eq(g("mat"), mat_value)
-    return [
+        mat_ok = mat_match(g("mat"), mat_value)
+    checks = [
         ("材質", mat_ok),
-        ("板厚", (_star(g("t_min")) or v_le(g("t_min"), t)) and (_star(g("t_max")) or v_ge(g("t_max"), t))),
-        ("板幅", (_star(g("w_min")) or v_le(g("w_min"), w)) and (_star(g("w_max")) or v_ge(g("w_max"), w))),
+        ("板厚", (_star(g("t_min")) or v_le(g("t_min"), t)) and (_star(g("t_max")) or v_ge(g("t_max"), t))
+         and lt("t_lt", t)),
+        ("板幅", (_star(g("w_min")) or v_le(g("w_min"), w)) and (_star(g("w_max")) or v_ge(g("w_max"), w))
+         and lt("w_lt", w)),
         ("板丈", (_star(g("l_min")) or v_le(g("l_min"), ln)) and (_star(g("l_gt")) or v_lt(g("l_gt"), ln))
-         and (_star(g("l_max")) or v_ge(g("l_max"), ln))),
-        ("単重", _star(g("wt_max")) or v_ge(g("wt_max"), lot.unit_w)),
+         and (_star(g("l_max")) or v_ge(g("l_max"), ln)) and lt("l_lt", ln)),
+        ("単重", (_star(g("wt_max")) or v_ge(g("wt_max"), lot.unit_w)) and (_star(n("wt_min")) or v_le(n("wt_min"), lot.unit_w))
+         and lt("wt_lt", lot.unit_w)),
     ]
+    if not _star(n("mmat")):          # 製造材質（寸法の基準にかかわらず製造材質で比べる）
+        checks.insert(1, ("製造材質", mat_match(n("mmat"), lot.v.get(C.M_MAT))))
+    return checks
 
 
 def classify(lot: Lot, cs: ConditionSet, want_trace: bool = False) -> Judge:

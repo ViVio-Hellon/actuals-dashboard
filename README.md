@@ -184,7 +184,7 @@ all-tools（日報複合ツール）と同じ決まりです。
 ## 試験と照合
 
 ```
-python -m unittest discover -s tests -t .              # 121 件（正解データ照合・境界値・同時保存・画面 API・旧ブック読込・パス設定・データ更新・停止・ログ）
+python -m unittest discover -s tests -t .              # 125 件（正解データ照合・境界値・同時保存・画面 API・旧ブック読込・パス設定・データ更新・停止・ログ）
 python tools/compare_with_vba.py 旧ツールで集計したブック.xlsm   # 並行運用中の突き合わせ
 python tools/make_golden.py 受領ブック.xlsm tests/fixtures/golden_YYYYMM.json   # 正解データを作る
 ```
